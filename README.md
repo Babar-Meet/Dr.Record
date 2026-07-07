@@ -33,6 +33,7 @@ It is intended for developers, content creators, QA engineers, and anyone who ne
 - **Always-on-top overlay** — a small translucent pill showing a red dot, "REC" label, and elapsed timer while recording.
 - **One-time setup** — on first launch the settings window appears automatically; afterwards the app starts silently to the tray.
 - **Custom output directory** — choose where `.mp4` files are saved.
+- **FFmpeg included in installer** — no separate FFmpeg download needed; the NSIS/MSI installer bundles FFmpeg alongside the app.
 - **FFmpeg-based encoding** — uses `gdigrab` for capture, `libx264` with `ultrafast` preset and `yuv420p` pixel format.
 - **Timestamped filenames** — e.g. `DrRecord_Screen_2026-07-07_14-30-00.mp4`.
 - **Test recording** — a 5-second test button in settings to verify everything works.
@@ -91,9 +92,15 @@ Dr.Record/
 │   │
 │   └── icons/                      # App icons (png, ico, icns)
 │
+├── scripts/
+│   └── build-release.ps1           # Automated release build script (downloads FFmpeg, builds all)
+│
 ├── tests/
 │   ├── TEST_PLAN.md                # Comprehensive black-box test specification (821 cases)
 │   └── Run-Tests.ps1               # Automated PowerShell test runner
+│
+├── resources/
+│   └── ffmpeg/                     # FFmpeg binaries bundled in the installer (gitignored)
 │
 └── dist/                           # Vite build output (auto-generated)
 ```
@@ -385,7 +392,7 @@ Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are
 
 ### External Runtime Dependency
 
-- **FFmpeg** — must be installed and available in `PATH`. Used for all screen capture and encoding. The app does not bundle FFmpeg.
+- **FFmpeg** — used for all screen capture and encoding. When installed via the official installer (NSIS/MSI), FFmpeg is bundled alongside the app. When building from source, the app falls back to `ffmpeg` in `PATH`.
 
 ---
 
@@ -393,9 +400,10 @@ Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are
 
 ### Prerequisites
 
-1. **FFmpeg** — Download from [ffmpeg.org](https://ffmpeg.org/download.html) and ensure `ffmpeg` is available in your system `PATH`. Verify with `ffmpeg -version`.
-2. **Windows 10 or 11** (64-bit).
-3. **WebView2 Runtime** — Ships with Windows 11 and recent Windows 10 builds. If missing, the Tauri installer will prompt you to install it.
+1. **Windows 10 or 11** (64-bit).
+2. **WebView2 Runtime** — Ships with Windows 11 and recent Windows 10 builds. If missing, the installer will prompt you to install it.
+
+> FFmpeg is bundled inside the installer. No separate installation needed.
 
 ### From Release Build
 
@@ -407,15 +415,24 @@ Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are
 
 1. Install [Rust](https://rustup.rs) (stable toolchain).
 2. Install [Node.js](https://nodejs.org) 18+.
-3. Install [FFmpeg](https://ffmpeg.org/download.html) and add it to `PATH`.
-4. Clone the repository and build:
+3. Clone the repository.
+4. Use the automated build script (downloads FFmpeg and builds everything):
 
 ```powershell
 git clone https://github.com/Babar-Meet/Dr.Record.git
 cd Dr.Record
-npm install
-npm run tauri build
+.\scripts\build-release.ps1
 ```
+
+Or build manually:
+
+```powershell
+npm install
+npm run build          # Build frontend
+npm run tauri build    # Build Tauri app + installer
+```
+
+> When building manually, make sure `ffmpeg` is in `PATH` for development, or copy `ffmpeg.exe` to `resources/ffmpeg/` before running `npm run tauri build` to include it in the installer.
 
 The installers will be in `src-tauri/target/release/bundle/`.
 
