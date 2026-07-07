@@ -1,0 +1,32 @@
+# Rust / Cargo build output
+src-tauri/target/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Tauri generated icons (can be regenerated)
+src-tauri/icons/*.png
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+src-tauri/debug/
+
+# Test output artifacts
+tests/*.csv
+tests/*.json

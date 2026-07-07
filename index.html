@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dr. Record — Settings</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body class="settings-body">
+  <div class="settings-container">
+    <div class="settings-header">
+      <div class="logo">🎥</div>
+      <h1>Dr. Record</h1>
+      <p class="subtitle">Zero BS. Just record.</p>
+    </div>
+
+    <div class="first-run-banner" id="firstRunBanner">
+      Welcome! Pick your output folder and hotkey, then you're done.
+    </div>
+
+    <div class="setting-group">
+      <label class="setting-label">Output Directory</label>
+      <div class="picker-row">
+        <input type="text" id="outputDir" class="picker-input" readonly />
+        <button id="pickDirBtn" class="btn btn-secondary">Browse</button>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <label class="setting-label">Start / Stop Hotkey</label>
+      <div class="picker-row">
+        <input type="text" id="hotkeyInput" class="picker-input hotkey-input" readonly placeholder="Press a key combination..." />
+        <button id="captureHotkeyBtn" class="btn btn-secondary">Capture</button>
+      </div>
+      <p class="hint">Press the button then type your shortcut (e.g. Ctrl+Shift+R)</p>
+    </div>
+
+    <div class="setting-group">
+      <label class="setting-label">Recording Mode</label>
+      <div class="radio-group">
+        <label class="radio-item">
+          <input type="radio" name="mode" value="fullscreen" checked />
+          <span>Full Screen</span>
+        </label>
+        <label class="radio-item">
+          <input type="radio" name="mode" value="multimonitor" />
+          <span>All Monitors</span>
+        </label>
+        <label class="radio-item">
+          <input type="radio" name="mode" value="window" />
+          <span>Active Window</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <label class="setting-label">
+        <input type="checkbox" id="showOverlay" checked />
+        <span>Show recording overlay</span>
+      </label>
+    </div>
+
+    <div class="settings-footer">
+      <div class="status-row" id="statusRow">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Idle</span>
+      </div>
+      <div class="footer-actions">
+        <button id="testRecBtn" class="btn btn-secondary">Test Record (5s)</button>
+        <button id="saveBtn" class="btn btn-primary">Save &amp; Start</button>
+      </div>
+    </div>
+
+    <div class="notification" id="notification"></div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
