@@ -80,6 +80,22 @@ fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32) -> Vec<Strin
     args
 }
 
+fn find_ffmpeg() -> String {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+
+    let local_path = exe_dir.join("ffmpeg.exe");
+    if local_path.exists() {
+        tracing::info!("Using bundled FFmpeg at: {:?}", local_path);
+        return local_path.to_string_lossy().to_string();
+    }
+
+    tracing::info!("No bundled FFmpeg found, falling back to PATH");
+    "ffmpeg".to_string()
+}
+
 pub fn start_recording(state: &RecorderState, output_dir: &str, mode: &str, framerate: u32) -> Result<String, String> {
     if state.is_recording.load(Ordering::SeqCst) {
         return Err("Already recording".to_string());
@@ -90,7 +106,8 @@ pub fn start_recording(state: &RecorderState, output_dir: &str, mode: &str, fram
     let args = build_ffmpeg_args(&output_path, mode, framerate);
     tracing::info!("Starting FFmpeg with args: {:?}", args);
 
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg_path = find_ffmpeg();
+    let mut child = Command::new(&ffmpeg_path)
         .args(&args)
         .stdin(Stdio::piped())
         .stderr(Stdio::null())

@@ -30,3 +30,6 @@ src-tauri/debug/
 # Test output artifacts
 tests/*.csv
 tests/*.json
+
+# Bundled FFmpeg (downloaded by scripts/build-release.ps1)
+resources/ffmpeg/*.exe

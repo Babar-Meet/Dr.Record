@@ -25,6 +25,9 @@
       "icons/icon.ico"
     ],
     "targets": "all",
+    "resources": {
+      "../resources/ffmpeg/ffmpeg.exe": "ffmpeg.exe"
+    },
     "windows": {
       "wix": null,
       "nsis": {
