@@ -121,12 +121,15 @@ fn find_ffmpeg() -> String {
 }
 
 fn ffmpeg_on_path() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        .stderr(Stdio::null());
+        
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd.spawn().is_ok()
 }
 
 pub fn start_recording(
@@ -150,6 +153,7 @@ pub fn start_recording(
         return Err("FFmpeg not found. Ensure ffmpeg.exe is bundled or on PATH.".to_string());
     }
 
+    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| tracing::warn!("Failed to create output dir: {}", e));
     let output_path = generate_output_path(output_dir, mode);
     let args = build_ffmpeg_args(&output_path, mode, framerate, quality);
     tracing::info!("FFmpeg args: {:?}", args);

@@ -16,7 +16,7 @@ fn set_auto_start(enabled: bool) {
     if let Ok(run) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(key, winreg::enums::KEY_SET_VALUE) {
         if enabled {
             if let Ok(exe) = std::env::current_exe() {
-                let _ = run.set_value("Dr.Record", &exe.to_string_lossy().to_string());
+                let _ = run.set_value("Dr.Record", &format!("\"{}\" --autostart", exe.to_string_lossy()));
             }
         } else {
             let _ = run.delete_value("Dr.Record");
@@ -226,7 +226,10 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             set_auto_start(config.auto_start);
 
-            create_settings_window(app_handle)?;
+            let args: Vec<String> = std::env::args().collect();
+            if !args.contains(&"--autostart".to_string()) {
+                create_settings_window(app_handle)?;
+            }
 
             // Register initial hotkey
             let hk = config.hotkey.clone();

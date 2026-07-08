@@ -8,7 +8,7 @@ pub fn create_overlay_window(app: &AppHandle) -> Result<(), String> {
 
     let monitor = match app.get_webview_window("settings") {
         Some(w) => w.current_monitor().ok().flatten(),
-        None => None,
+        None => app.primary_monitor().ok().flatten(),
     };
 
     let (window_width, _window_height) = match &monitor {
@@ -58,7 +58,7 @@ pub fn create_settings_window(app: &AppHandle) -> Result<(), String> {
 
     let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Dr. Record Settings")
-        .inner_size(520.0, 480.0)
+        .inner_size(520.0, 600.0)
         .resizable(false)
         .center()
         .build()

@@ -27,7 +27,23 @@ impl Default for Config {
             framerate: 60,
             quality: "high".to_string(),
             show_overlay: true,
-            auto_start: false,
+            auto_start: {
+                #[cfg(target_os = "windows")]
+                {
+                    use winreg::enums::HKEY_CURRENT_USER;
+                    use winreg::RegKey;
+                    let key = r"Software\Microsoft\Windows\CurrentVersion\Run";
+                    if let Ok(run) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(key) {
+                        run.get_value::<String, _>("Dr.Record").is_ok()
+                    } else {
+                        false
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    false
+                }
+            },
         }
     }
 }
