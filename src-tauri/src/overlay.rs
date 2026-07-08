@@ -24,18 +24,23 @@ pub fn create_overlay_window(app: &AppHandle) -> Result<(), String> {
     let x = (window_width - overlay_width - 20.0).max(0.0);
     let y = 20.0;
 
-    let window = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
         .title("Dr. Record Overlay")
         .inner_size(overlay_width, overlay_height)
         .position(x, y)
         .always_on_top(true)
-        .transparent(true)
         .decorations(false)
-        .skip_taskbar(true)
         .focusable(false)
         .resizable(false)
-        .shadow(false)
-        .build()
+        .shadow(false);
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.transparent(true).skip_taskbar(true);
+    }
+
+    let window = builder.build()
         .map_err(|e| format!("Failed to create overlay: {}", e))?;
 
     window.set_cursor_visible(false).ok();

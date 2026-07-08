@@ -46,8 +46,9 @@ pub fn generate_output_path(output_dir: &str, mode: &str) -> String {
         "multimonitor" => "Multi",
         _ => "Screen",
     };
+    let sep = std::path::MAIN_SEPARATOR;
     format!(
-        "{}\\DrRecord_{}_{}.mp4",
+        "{}{sep}DrRecord_{}_{}.mp4",
         output_dir.trim_end_matches('\\').trim_end_matches('/'),
         mode_label,
         timestamp
@@ -63,27 +64,53 @@ pub fn quality_to_crf(quality: &str) -> u32 {
     }
 }
 
+#[allow(unused_variables)]
 fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32, quality: &str) -> Vec<String> {
     let crf = quality_to_crf(quality);
     let fps = if framerate == 0 { 60 } else { framerate };
 
     let mut args = vec![
         "-y".to_string(),
-        "-f".to_string(), "gdigrab".to_string(),
-        "-framerate".to_string(), fps.to_string(),
     ];
 
-    match mode {
-        "multimonitor" | "window" => {
-            args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
+    #[cfg(target_os = "macos")]
+    {
+        args.extend_from_slice(&[
+            "-f".to_string(), "avfoundation".to_string(),
+            "-framerate".to_string(), fps.to_string(),
+            "-i".to_string(), "1".to_string(),
+            "-video_size".to_string(), get_display_size(),
+        ]);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        args.extend_from_slice(&[
+            "-f".to_string(), "gdigrab".to_string(),
+            "-framerate".to_string(), fps.to_string(),
+        ]);
+
+        match mode {
+            "multimonitor" | "window" => {
+                args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
+            }
+            _ => {
+                args.extend_from_slice(&[
+                    "-offset_x".to_string(), "0".to_string(),
+                    "-offset_y".to_string(), "0".to_string(),
+                    "-i".to_string(), "desktop".to_string(),
+                ]);
+            }
         }
-        _ => {
-            args.extend_from_slice(&[
-                "-offset_x".to_string(), "0".to_string(),
-                "-offset_y".to_string(), "0".to_string(),
-                "-i".to_string(), "desktop".to_string(),
-            ]);
-        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        args.extend_from_slice(&[
+            "-f".to_string(), "x11grab".to_string(),
+            "-framerate".to_string(), fps.to_string(),
+            "-i".to_string(), ":0.0".to_string(),
+        ]);
     }
 
     args.extend_from_slice(&[
@@ -97,16 +124,43 @@ fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32, quality: &st
     args
 }
 
+#[cfg(target_os = "macos")]
+fn get_display_size() -> String {
+    use std::process::Command;
+    if let Ok(out) = Command::new("system_profiler")
+        .args(["SPDisplaysDataType"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            if line.contains("Resolution") {
+                if let Some(res) = line.split(':').nth(1) {
+                    let dims: Vec<&str> = res.trim().split_whitespace().collect();
+                    if dims.len() >= 2 {
+                        return format!("{}x{}", dims[0], dims[2].trim_end_matches(','));
+                    }
+                }
+            }
+        }
+    }
+    "1920x1080".to_string()
+}
+
 fn find_ffmpeg() -> String {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_default();
 
+    #[cfg(target_os = "windows")]
+    let ffmpeg_name = "ffmpeg.exe";
+    #[cfg(not(target_os = "windows"))]
+    let ffmpeg_name = "ffmpeg";
+
     let candidates = [
-        exe_dir.join("ffmpeg.exe"),
-        exe_dir.join("resources").join("ffmpeg.exe"),
-        exe_dir.join("..").join("resources").join("ffmpeg.exe"),
+        exe_dir.join(ffmpeg_name),
+        exe_dir.join("resources").join(ffmpeg_name),
+        exe_dir.join("..").join("resources").join(ffmpeg_name),
     ];
 
     for path in &candidates {
@@ -117,7 +171,7 @@ fn find_ffmpeg() -> String {
     }
 
     tracing::info!("No bundled FFmpeg, falling back to PATH");
-    "ffmpeg".to_string()
+    ffmpeg_name.to_string()
 }
 
 fn ffmpeg_on_path() -> bool {

@@ -21,18 +21,18 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.icns"
     ],
-    "targets": "nsis",
-    "resources": {
-      "../resources/ffmpeg/ffmpeg.exe": "ffmpeg.exe"
-    },
+    "targets": ["nsis", "dmg"],
+    "resources": {},
     "windows": {
       "wix": null,
       "nsis": {
         "installMode": "currentUser"
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
     }
   }
 }
