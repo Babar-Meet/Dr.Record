@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tracing;
 
 pub fn create_overlay_window(app: &AppHandle) -> Result<(), String> {
@@ -56,13 +56,21 @@ pub fn create_settings_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Dr. Record Settings")
         .inner_size(520.0, 480.0)
         .resizable(false)
         .center()
         .build()
         .map_err(|e| format!("Failed to create settings: {}", e))?;
+
+    let w = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            let _ = w.hide();
+            api.prevent_close();
+        }
+    });
 
     tracing::info!("Settings window created");
     Ok(())

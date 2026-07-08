@@ -9,13 +9,8 @@
 <body class="settings-body">
   <div class="settings-container">
     <div class="settings-header">
-      <div class="logo">🎥</div>
       <h1>Dr. Record</h1>
-      <p class="subtitle">Zero BS. Just record.</p>
-    </div>
-
-    <div class="first-run-banner" id="firstRunBanner">
-      Welcome! Pick your output folder and hotkey, then you're done.
+      <p class="subtitle">Screen recorder for Windows</p>
     </div>
 
     <div class="setting-group">
@@ -53,12 +48,44 @@
       </div>
     </div>
 
+    <div class="setting-row">
+      <div class="setting-group" style="flex:1">
+        <label class="setting-label">Frame Rate</label>
+        <select id="framerateSelect" class="picker-input select-input">
+          <option value="0">Auto</option>
+          <option value="24">24 FPS</option>
+          <option value="30">30 FPS</option>
+          <option value="60">60 FPS</option>
+          <option value="120">120 FPS</option>
+          <option value="144">144 FPS</option>
+        </select>
+      </div>
+      <div class="setting-group" style="flex:1">
+        <label class="setting-label">Quality</label>
+        <select id="qualitySelect" class="picker-input select-input">
+          <option value="low">Low (small file)</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="lossless">Lossless</option>
+        </select>
+      </div>
+    </div>
+
     <div class="setting-group">
       <label class="setting-label">
         <input type="checkbox" id="showOverlay" checked />
         <span>Show recording overlay</span>
       </label>
     </div>
+
+    <div class="setting-group">
+      <label class="setting-label">
+        <input type="checkbox" id="autoStart" />
+        <span>Run on Windows startup</span>
+      </label>
+    </div>
+
+    <div class="display-info" id="displayInfo">Display: detecting...</div>
 
     <div class="settings-footer">
       <div class="status-row" id="statusRow">

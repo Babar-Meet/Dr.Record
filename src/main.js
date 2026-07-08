@@ -14,13 +14,10 @@ async function loadConfig() {
     $("#hotkeyInput").value = config.hotkey || "Ctrl+Shift+R";
     currentHotkey = config.hotkey || "Ctrl+Shift+R";
     document.querySelector(`input[name="mode"][value="${config.recording_mode || "fullscreen"}"]`).checked = true;
+    $("#framerateSelect").value = String(config.framerate ?? 60);
+    $("#qualitySelect").value = config.quality || "high";
     $("#showOverlay").checked = config.show_overlay !== false;
-
-    if (config.first_run) {
-      $("#firstRunBanner").style.display = "block";
-    } else {
-      $("#firstRunBanner").style.display = "none";
-    }
+    $("#autoStart").checked = config.auto_start === true;
   } catch (e) {
     showNotification("Failed to load config: " + e, "error");
   }
@@ -31,9 +28,10 @@ async function saveConfigAndStart() {
     output_dir: $("#outputDir").value,
     hotkey: currentHotkey,
     recording_mode: document.querySelector("input[name='mode']:checked").value,
-    framerate: 30,
+    framerate: parseInt($("#framerateSelect").value, 10),
+    quality: $("#qualitySelect").value,
     show_overlay: $("#showOverlay").checked,
-    first_run: false,
+    auto_start: $("#autoStart").checked,
   };
 
   if (!config.output_dir) {
@@ -43,9 +41,9 @@ async function saveConfigAndStart() {
 
   try {
     await invoke("save_config", { config });
-    await invoke("setup_first_run");
-    showNotification("Config saved! Hotkey: " + config.hotkey, "success");
-    setTimeout(() => window.close(), 1200);
+    await invoke("reload_hotkey", { hotkey: currentHotkey });
+    showNotification("Saved! Hotkey: " + currentHotkey, "success");
+    setTimeout(() => invoke("hide_settings"), 1200);
   } catch (e) {
     showNotification("Failed to save: " + e, "error");
   }
@@ -79,20 +77,20 @@ function handleKeyCapture(e) {
     return;
   }
 
+  const skipKeys = {
+    "Control": true, "Shift": true, "Alt": true, "Meta": true,
+    "Escape": true, "Tab": true, "CapsLock": true,
+  };
+
+  if (skipKeys[key]) return;
+
   const parts = [];
   if (e.ctrlKey) parts.push("Ctrl");
   if (e.altKey) parts.push("Alt");
   if (e.shiftKey) parts.push("Shift");
   if (e.metaKey) parts.push("Win");
 
-  const map = {
-    "Control": null, "Shift": null, "Alt": null, "Meta": null,
-    "Escape": null, "Tab": null, "CapsLock": null,
-  };
-
-  if (!map[key] && key.length >= 1) {
-    parts.push(key.length === 1 ? key.toUpperCase() : key);
-  }
+  parts.push(key.length === 1 ? key.toUpperCase() : key);
 
   if (parts.length < 2) return;
 
@@ -139,13 +137,13 @@ async function testRecord() {
       return;
     }
 
-    await invoke("start_rec");
+    await invoke("start_rec", {});
     showNotification("Recording test... stopping in 5s", "success");
     updateStatus();
 
     setTimeout(async () => {
       try {
-        const result = await invoke("stop_rec");
+        const result = await invoke("stop_rec", {});
         showNotification("Test recording saved!", "success");
         updateStatus();
       } catch (e) {
@@ -154,6 +152,22 @@ async function testRecord() {
     }, 5000);
   } catch (e) {
     showNotification("Error: " + e, "error");
+  }
+}
+
+async function updateDisplayInfo() {
+  try {
+    const info = await invoke("get_display_info");
+    const el = $("#displayInfo");
+    if (info && info.width && info.height) {
+      el.textContent = `Display: ${info.width}x${info.height} @ ${info.refreshRate || 60} Hz`;
+    }
+  } catch {
+    // use screen info from browser
+    const el = $("#displayInfo");
+    if (window.screen) {
+      el.textContent = `Display: ${screen.width}x${screen.height}`;
+    }
   }
 }
 
@@ -168,6 +182,7 @@ function showNotification(msg, type = "info") {
 document.addEventListener("DOMContentLoaded", async () => {
   await loadConfig();
   updateStatus();
+  updateDisplayInfo();
 
   const interval = setInterval(updateStatus, 1000);
 

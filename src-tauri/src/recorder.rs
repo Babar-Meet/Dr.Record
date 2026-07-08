@@ -1,10 +1,20 @@
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use chrono::Local;
 use std::io::Write;
 use std::process::{Child, ChildStdin, Command, Stdio};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 use tracing;
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 pub struct RecorderState {
     pub is_recording: AtomicBool,
@@ -12,6 +22,7 @@ pub struct RecorderState {
     pub stdin: Mutex<Option<ChildStdin>>,
     pub start_time: Mutex<Option<Instant>>,
     pub output_path: Mutex<Option<String>>,
+    pub hotkey_str: Mutex<String>,
 }
 
 impl RecorderState {
@@ -22,6 +33,7 @@ impl RecorderState {
             stdin: Mutex::new(None),
             start_time: Mutex::new(None),
             output_path: Mutex::new(None),
+            hotkey_str: Mutex::new("Ctrl+Shift+R".to_string()),
         }
     }
 }
@@ -42,23 +54,28 @@ pub fn generate_output_path(output_dir: &str, mode: &str) -> String {
     )
 }
 
-fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32) -> Vec<String> {
+pub fn quality_to_crf(quality: &str) -> u32 {
+    match quality {
+        "lossless" => 0,
+        "high" => 18,
+        "low" => 28,
+        _ => 23,
+    }
+}
+
+fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32, quality: &str) -> Vec<String> {
+    let crf = quality_to_crf(quality);
+    let fps = if framerate == 0 { 60 } else { framerate };
+
     let mut args = vec![
         "-y".to_string(),
         "-f".to_string(), "gdigrab".to_string(),
-        "-framerate".to_string(), framerate.to_string(),
+        "-framerate".to_string(), fps.to_string(),
     ];
 
     match mode {
-        "multimonitor" => {
-            args.extend_from_slice(&[
-                "-i".to_string(), "desktop".to_string(),
-            ]);
-        }
-        "window" => {
-            args.extend_from_slice(&[
-                "-i".to_string(), "desktop".to_string(),
-            ]);
+        "multimonitor" | "window" => {
+            args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
         }
         _ => {
             args.extend_from_slice(&[
@@ -72,7 +89,7 @@ fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32) -> Vec<Strin
     args.extend_from_slice(&[
         "-c:v".to_string(), "libx264".to_string(),
         "-preset".to_string(), "ultrafast".to_string(),
-        "-crf".to_string(), "23".to_string(),
+        "-crf".to_string(), crf.to_string(),
         "-pix_fmt".to_string(), "yuv420p".to_string(),
         output_path.to_string(),
     ]);
@@ -86,43 +103,87 @@ fn find_ffmpeg() -> String {
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_default();
 
-    let local_path = exe_dir.join("ffmpeg.exe");
-    if local_path.exists() {
-        tracing::info!("Using bundled FFmpeg at: {:?}", local_path);
-        return local_path.to_string_lossy().to_string();
+    let candidates = [
+        exe_dir.join("ffmpeg.exe"),
+        exe_dir.join("resources").join("ffmpeg.exe"),
+        exe_dir.join("..").join("resources").join("ffmpeg.exe"),
+    ];
+
+    for path in &candidates {
+        if path.exists() {
+            tracing::info!("FFmpeg at: {:?}", path);
+            return path.to_string_lossy().to_string();
+        }
     }
 
-    tracing::info!("No bundled FFmpeg found, falling back to PATH");
+    tracing::info!("No bundled FFmpeg, falling back to PATH");
     "ffmpeg".to_string()
 }
 
-pub fn start_recording(state: &RecorderState, output_dir: &str, mode: &str, framerate: u32) -> Result<String, String> {
+fn ffmpeg_on_path() -> bool {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+pub fn start_recording(
+    state: &RecorderState,
+    output_dir: &str,
+    mode: &str,
+    framerate: u32,
+    quality: &str,
+) -> Result<String, String> {
     if state.is_recording.load(Ordering::SeqCst) {
         return Err("Already recording".to_string());
     }
 
-    let output_path = generate_output_path(output_dir, mode);
-
-    let args = build_ffmpeg_args(&output_path, mode, framerate);
-    tracing::info!("Starting FFmpeg with args: {:?}", args);
-
     let ffmpeg_path = find_ffmpeg();
-    let mut child = Command::new(&ffmpeg_path)
-        .args(&args)
+    let ff_exists = if ffmpeg_path == "ffmpeg" {
+        ffmpeg_on_path()
+    } else {
+        std::path::Path::new(&ffmpeg_path).exists()
+    };
+    if !ff_exists {
+        return Err("FFmpeg not found. Ensure ffmpeg.exe is bundled or on PATH.".to_string());
+    }
+
+    let output_path = generate_output_path(output_dir, mode);
+    let args = build_ffmpeg_args(&output_path, mode, framerate, quality);
+    tracing::info!("FFmpeg args: {:?}", args);
+
+    let mut cmd = Command::new(&ffmpeg_path);
+    cmd.args(&args)
         .stdin(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to start ffmpeg: {}. Is ffmpeg installed?", e))?;
+        .stdout(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        let log_path = std::env::temp_dir().join("dr-record-ffmpeg.log");
+        if let Ok(f) = std::fs::File::create(&log_path) {
+            cmd.stderr(std::process::Stdio::from(f));
+        } else {
+            cmd.stderr(Stdio::null());
+        }
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    cmd.stderr(Stdio::null());
+
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
 
     let stdin = child.stdin.take()
         .ok_or_else(|| "Failed to capture ffmpeg stdin".to_string())?;
 
     state.is_recording.store(true, Ordering::SeqCst);
-    *state.process.lock().unwrap() = Some(child);
-    *state.stdin.lock().unwrap() = Some(stdin);
-    *state.start_time.lock().unwrap() = Some(Instant::now());
-    *state.output_path.lock().unwrap() = Some(output_path.clone());
+    *lock(&state.process) = Some(child);
+    *lock(&state.stdin) = Some(stdin);
+    *lock(&state.start_time) = Some(Instant::now());
+    *lock(&state.output_path) = Some(output_path.clone());
 
     tracing::info!("Recording started: {}", output_path);
     Ok(output_path)
@@ -135,31 +196,29 @@ pub fn stop_recording(state: &RecorderState) -> Result<Option<String>, String> {
 
     tracing::info!("Stopping recording...");
 
-    if let Some(mut stdin) = state.stdin.lock().unwrap().take() {
+    if let Some(mut stdin) = lock(&state.stdin).take() {
         let _ = stdin.write_all(b"q\n");
         let _ = stdin.flush();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(300));
         drop(stdin);
     }
 
-    let mut process_guard = state.process.lock().unwrap();
-    if let Some(mut child) = process_guard.take() {
+    if let Some(mut child) = lock(&state.process).take() {
         let _ = child.wait();
-        tracing::info!("FFmpeg process exited");
+        tracing::info!("FFmpeg exited");
     }
-    drop(process_guard);
 
     state.is_recording.store(false, Ordering::SeqCst);
-    *state.start_time.lock().unwrap() = None;
+    *lock(&state.start_time) = None;
 
-    let path = state.output_path.lock().unwrap().take();
+    let path = lock(&state.output_path).take();
     tracing::info!("Recording stopped: {:?}", path);
 
     Ok(path)
 }
 
 pub fn get_elapsed(state: &RecorderState) -> u64 {
-    if let Some(start) = *state.start_time.lock().unwrap() {
+    if let Some(start) = *lock(&state.start_time) {
         start.elapsed().as_secs()
     } else {
         0

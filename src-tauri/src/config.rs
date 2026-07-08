@@ -10,8 +10,9 @@ pub struct Config {
     pub hotkey: String,
     pub recording_mode: String,
     pub framerate: u32,
+    pub quality: String,
     pub show_overlay: bool,
-    pub first_run: bool,
+    pub auto_start: bool,
 }
 
 impl Default for Config {
@@ -23,9 +24,10 @@ impl Default for Config {
                 .to_string(),
             hotkey: "Ctrl+Shift+R".to_string(),
             recording_mode: "fullscreen".to_string(),
-            framerate: 30,
+            framerate: 60,
+            quality: "high".to_string(),
             show_overlay: true,
-            first_run: true,
+            auto_start: false,
         }
     }
 }
