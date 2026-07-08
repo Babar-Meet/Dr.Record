@@ -15,7 +15,7 @@ Built with [Tauri 2](https://v2.tauri.app) and [FFmpeg](https://ffmpeg.org/).
 Screen recording on Windows often means heavyweight tools (OBS, Xbox Game Bar) that consume resources and interrupt workflow. Dr. Record provides a single-purpose alternative:
 
 - **Toggle recording** with a configurable global hotkey from any application.
-- **No windows or dialogs** during normal use — the app runs in the system tray.
+- **Minimal UI** — the app runs in the system tray; a translucent overlay shows a timer during recording.
 - **Small footprint** — written in Rust with a minimal HTML/JS frontend and an FFmpeg subprocess for capture.
 
 It is intended for developers, content creators, QA engineers, and anyone who needs quick, frictionless screen capture without launching a full recording studio.
@@ -25,18 +25,22 @@ It is intended for developers, content creators, QA engineers, and anyone who ne
 ## Features
 
 - **Global hotkey toggle** — configurable key combination (default `Ctrl+Shift+R`) starts and stops recording from any app.
-- **System tray operation** — app lives in the notification area; left-click opens settings, right-click shows a menu with Settings and Quit.
+- **System tray operation** — left-click opens settings, right-click shows a menu with Settings and Quit.
 - **Three recording modes:**
   - **Full Screen** — primary monitor only.
   - **All Monitors** — entire virtual desktop (all connected monitors).
   - **Active Window** — capture of a specific application window.
-- **Always-on-top overlay** — a small translucent pill showing a red dot, "REC" label, and elapsed timer while recording.
-- **One-time setup** — on first launch the settings window appears automatically; afterwards the app starts silently to the tray.
-- **Custom output directory** — choose where `.mp4` files are saved.
-- **FFmpeg included in installer** — no separate FFmpeg download needed; the NSIS/MSI installer bundles FFmpeg alongside the app.
+- **Always-on-top overlay** — a small translucent pill showing a red dot, "REC" label, and elapsed timer while recording. Can be disabled in settings.
+- **Settings window on every launch** — the settings window opens each time the app starts. Closing it hides the app to the system tray rather than quitting.
+- **Custom output directory** — choose where `.mp4` files are saved via a native folder picker.
+- **Four quality levels** — Lossless, High, Medium, Low — mapped to CRF values 0, 18, 23, and 28 respectively.
+- **Configurable frame rate** — Auto (60 FPS), 24, 30, 60, 120, 144 FPS.
+- **FFmpeg bundled in installer** — the NSIS installer includes `ffmpeg.exe` alongside the app binary; no separate download needed.
 - **FFmpeg-based encoding** — uses `gdigrab` for capture, `libx264` with `ultrafast` preset and `yuv420p` pixel format.
 - **Timestamped filenames** — e.g. `DrRecord_Screen_2026-07-07_14-30-00.mp4`.
-- **Test recording** — a 5-second test button in settings to verify everything works.
+- **Test recording button** — a 5-second test in the settings window to verify everything works.
+- **Auto-start on Windows login** — optional registry-based startup via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+- **Display info** — the settings window shows the detected monitor resolution and refresh rate.
 - **No telemetry, no internet access required** — fully offline.
 
 ---
@@ -49,13 +53,13 @@ It is intended for developers, content creators, QA engineers, and anyone who ne
 | Backend Language | Rust (edition 2021) |
 | Frontend | Vanilla JavaScript, HTML5, CSS3 |
 | Bundler | [Vite](https://vitejs.dev) 6 |
-| Recording Engine | [FFmpeg](https://ffmpeg.org) (external dependency, `gdigrab` + `libx264`) |
+| Recording Engine | [FFmpeg](https://ffmpeg.org) (external process, `gdigrab` + `libx264`) |
 | Package Manager (JS) | npm |
 | Package Manager (Rust) | Cargo |
-| Rust Crates | `tauri`, `tauri-plugin-shell`, `tauri-plugin-dialog`, `tauri-plugin-global-shortcut`, `serde`, `serde_json`, `dirs`, `chrono`, `tracing`, `tracing-subscriber`, `tokio` |
-| Windows Installers | WiX (.msi), NSIS (.exe) |
+| Rust Crates | `tauri`, `tauri-plugin-shell`, `tauri-plugin-dialog`, `tauri-plugin-global-shortcut`, `serde`, `serde_json`, `dirs`, `chrono`, `tracing`, `tracing-subscriber`, `tokio`, `winreg` |
+| Windows Installer | NSIS (.exe) |
 | Build Tools | `@tauri-apps/cli`, `vite` |
-| Platforms | Windows 10/11 (targeted) |
+| Platforms | Windows 10/11 (64-bit, targeted) |
 
 ---
 
@@ -81,7 +85,7 @@ Dr.Record/
 │   ├── tauri.conf.json             # Tauri app configuration (windows, bundle, build)
 │   │
 │   ├── src/
-│   │   ├── main.rs                 # Entry point (hides console on release)
+│   │   ├── main.rs                 # Entry point (hides console on release builds)
 │   │   ├── lib.rs                  # App lifecycle, Tauri setup, IPC commands, shortcuts
 │   │   ├── config.rs               # Config serialization/deserialization (JSON)
 │   │   ├── recorder.rs             # FFmpeg subprocess management (start/stop/elapsed)
@@ -96,8 +100,8 @@ Dr.Record/
 │   └── build-release.ps1           # Automated release build script (downloads FFmpeg, builds all)
 │
 ├── tests/
-│   ├── TEST_PLAN.md                # Comprehensive black-box test specification (821 cases)
-│   └── Run-Tests.ps1               # Automated PowerShell test runner
+│   ├── TEST_PLAN.md                # Comprehensive black-box test specification (1084 cases)
+│   └── Run-Tests.ps1               # Automated PowerShell e2e test runner
 │
 ├── resources/
 │   └── ffmpeg/                     # FFmpeg binaries bundled in the installer (gitignored)
@@ -109,13 +113,14 @@ Dr.Record/
 
 | File | Purpose |
 |---|---|
-| `src-tauri/src/lib.rs` | Application entry point. Sets up the system tray icon & menu, registers the global hotkey, handles Tauri IPC commands (`start_rec`, `stop_rec`, `get_status`, `load_config`, `save_config`, etc.), and manages the app lifecycle (first-run vs. normal launch). |
-| `src-tauri/src/config.rs` | Defines the `Config` struct with fields `output_dir`, `hotkey`, `recording_mode`, `framerate`, `show_overlay`, `first_run`. Handles loading/saving JSON from `%APPDATA%\dr-record\config.json` with fallback to defaults on corruption. |
-| `src-tauri/src/recorder.rs` | Manages the FFmpeg subprocess lifecycle. `start_recording` spawns FFmpeg with gdigrab arguments. `stop_recording` sends `q` to FFmpeg's stdin and waits for exit. `generate_output_path` creates timestamped filenames. |
-| `src-tauri/src/overlay.rs` | Creates the always-on-top transparent overlay window (180×44 px, positioned at top-right of the primary monitor) and the 520×480 centered settings window. Reuses existing windows when possible. |
-| `src/main.js` | Settings UI logic: loads/saves config via Tauri IPC, captures keyboard shortcuts, shows status (idle/recording), triggers test recordings. |
+| `src-tauri/src/lib.rs` | Application entry point. Sets up the system tray icon & menu, registers the global hotkey, handles all Tauri IPC commands, and manages app lifecycle. |
+| `src-tauri/src/config.rs` | Defines the `Config` struct. Handles loading/saving JSON from `%APPDATA%\dr-record\config.json` with fallback to defaults on corruption or missing fields. |
+| `src-tauri/src/recorder.rs` | Manages the FFmpeg subprocess lifecycle. `start_recording` spawns FFmpeg with gdigrab arguments. `stop_recording` sends `q` to FFmpeg's stdin and waits for exit. Generates timestamped filenames. |
+| `src-tauri/src/overlay.rs` | Creates the always-on-top transparent overlay window (180×44 px, positioned at top-right) and the 520×480 centered settings window. Reuses existing windows when possible. The settings window close button is intercepted to hide rather than destroy the window. |
+| `src/main.js` | Settings UI logic: loads/saves config via Tauri IPC, captures keyboard shortcuts, shows status (idle/recording), triggers test recordings, displays monitor info. |
 | `src/overlay.js` | Polls `get_elapsed_secs` every second and displays elapsed time in `MM:SS` format. Closes the overlay window when `recording-stopped` event fires. |
-| `tests/TEST_PLAN.md` | 821 black-box test cases across 12 categories (installation, first launch, settings, hotkeys, recording engine, overlay, tray, file output, multi-monitor, edge cases, configuration, performance). |
+| `tests/TEST_PLAN.md` | 1084 black-box test cases across 12 categories (installation, first launch, settings, hotkeys, recording engine, overlay, tray, file output, multi-monitor, edge cases, configuration, performance). |
+| `tests/Run-Tests.ps1` | Automated PowerShell e2e test runner. Validates binary integrity, config persistence (including corruption recovery), FFmpeg pipeline, process management, resource usage, and config stress testing. |
 
 ---
 
@@ -159,15 +164,15 @@ Dr.Record/
 
 ### Request / Response Flow
 
-1. **Hotkey press** (e.g. `Ctrl+Shift+R`) → `tauri-plugin-global-shortcut` fires a Rust callback.
-2. **Toggle logic** in `lib.rs` checks the recording state.
-3. **Start**: `lib.rs:start_recording()` in `recorder.rs` spawns `ffmpeg` with appropriate arguments and stores the process handle. Events `recording-started` and `status-changed` are emitted to the frontend. The overlay window is created via `overlay.rs`.
-4. **Stop**: `lib.rs:stop_recording()` sends `q\n` to FFmpeg's stdin via `ChildStdin`, waits for the process to exit, and cleans up state. Events `recording-stopped` and `status-changed` are emitted. The overlay is closed.
-5. **Frontend**: JavaScript event listeners react to `status-changed`, `recording-started`, `recording-stopped`, and `recording-error` events to update the UI.
+1. **Hotkey press** (e.g. `Ctrl+Shift+R`) → `tauri-plugin-global-shortcut` fires a Rust callback in `lib.rs:handle_hotkey()`.
+2. **Toggle logic** checks `RecorderState::is_recording` to determine whether to start or stop.
+3. **Start**: `recorder.rs:start_recording()` spawns `ffmpeg` with `CREATE_NO_WINDOW` flag (Windows), stores the process handle and stdin pipe. Events `recording-started` and `status-changed` are emitted to the frontend. The overlay window is created via `overlay.rs:create_overlay_window()` if `show_overlay` is enabled.
+4. **Stop**: `recorder.rs:stop_recording()` sends `q\n` to FFmpeg's stdin via `ChildStdin`, waits 300ms, drops stdin, then calls `child.wait()`. Events `recording-stopped` and `status-changed` are emitted. The overlay is closed via `overlay.rs:close_overlay()`.
+5. **Frontend**: JavaScript event listeners react to `status-changed`, `recording-started`, `recording-stopped`, and `recording-error` events to update the settings UI. The overlay polls `get_elapsed_secs` every second to display the timer.
 
 ### State Management
 
-All mutable state is held in `Arc<RecorderState>` (defined in `recorder.rs`):
+All mutable recording state is held in `Arc<RecorderState>` (defined in `recorder.rs:19-38`):
 
 ```rust
 pub struct RecorderState {
@@ -176,6 +181,7 @@ pub struct RecorderState {
     pub stdin: Mutex<Option<ChildStdin>>,
     pub start_time: Mutex<Option<Instant>>,
     pub output_path: Mutex<Option<String>>,
+    pub hotkey_str: Mutex<String>,
 }
 ```
 
@@ -183,14 +189,16 @@ This is injected as Tauri managed state, accessible from any IPC command or shor
 
 ### Config Persistence
 
-Configuration is stored as JSON at `%APPDATA%\dr-record\config.json`. It is loaded on every hotkey press and when the settings window opens. Saving is triggered explicitly by the user clicking "Save & Start" in the settings window. On first launch (`first_run: true`), the settings window appears automatically and the hotkey is not registered until the user completes setup. Subsequent launches register the hotkey immediately and run silently in the tray.
+Configuration is stored as JSON at `%APPDATA%\dr-record\config.json`. It is loaded on app startup and when the settings window opens. Saving is triggered explicitly by the user clicking "Save & Start" in the settings window. The settings window auto-hides 1.2 seconds after a successful save. Config is loaded on every hotkey press (the hotkey handler reads `Config::load()` each time).
 
 ### Error Handling Strategy
 
-- **FFmpeg missing**: `Command::new("ffmpeg")` returns an error if FFmpeg is not in `PATH`; the error message instructs the user to install FFmpeg.
-- **Config corruption**: If `config.json` fails to parse, it is overwritten with defaults (the previous content is lost).
-- **Double-toggle protection**: `start_recording` and `stop_recording` check `state.is_recording` before proceeding, returning an "Already recording" / "Not recording" error.
-- **Frontend errors**: Displayed via a notification bar (auto-hides after 3 seconds). Recording errors are also emitted as `recording-error` events.
+- **FFmpeg not found**: `find_ffmpeg()` searches the executable directory, then `resources/`, then `PATH`. If not found, an error `"FFmpeg not found..."` is returned.
+- **FFmpeg stderr**: Redirected to `%TEMP%\dr-record-ffmpeg.log` on Windows for debugging.
+- **Config corruption**: If `config.json` fails to parse, it is overwritten with defaults (the previous content is lost). Missing fields are filled from `Config::default()` via `#[serde(default)]`.
+- **Double-toggle protection**: `start_recording` and `stop_recording` check `state.is_recording` before proceeding, returning `"Already recording"` / `"Not recording"` errors.
+- **Frontend errors**: Displayed via a notification bar that auto-hides after 3 seconds. Recording errors are also emitted as `recording-error` events.
+- **ExitRequested**: The app intercepts `ExitRequested` events and prevents exit when no exit code is set, keeping the app alive in the tray.
 
 ---
 
@@ -202,50 +210,54 @@ Configuration is stored as JSON at `%APPDATA%\dr-record\config.json`. It is load
 - **Inputs**: Reads from and writes to `%APPDATA%\dr-record\config.json`.
 - **Outputs**: A `Config` struct with typed fields.
 - **Dependencies**: `serde`, `serde_json`, `dirs`, `std::fs`.
-- **Edge cases**: Missing file, invalid JSON, missing fields — all result in a default config being saved.
+- **Edge cases**: Missing file, invalid JSON, missing fields — all result in a default config being saved. Unknown JSON fields are silently ignored (serde default behavior).
 
 ### 2. Recorder (`src-tauri/src/recorder.rs`)
 
 - **Responsibility**: Spawn, manage, and terminate the FFmpeg screen capture process.
-- **Inputs**: Output directory path, recording mode string (`fullscreen`, `multimonitor`, `window`), framerate.
+- **Inputs**: Output directory path, recording mode string (`fullscreen`, `multimonitor`, `window`), framerate, quality string.
 - **Outputs**: Path to the output `.mp4` file.
-- **Dependencies**: `chrono` (filenames), `std::process` (FFmpeg subprocess), `std::sync::atomic` (state).
+- **Dependencies**: `chrono` (filenames), `std::process` (FFmpeg subprocess), `std::sync::atomic` (state), `std::os::windows::process::CommandExt` (creation flags).
 - **FFmpeg arguments generated** (fullscreen example):
   ```
-  ffmpeg -y -f gdigrab -framerate 30 -offset_x 0 -offset_y 0 -i desktop
-         -c:v libx264 -preset ultrafast -crf 23 -pix_fmt yuv420p output.mp4
+  ffmpeg -y -f gdigrab -framerate 60 -offset_x 0 -offset_y 0 -i desktop
+         -c:v libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p output.mp4
   ```
-- **Stop mechanism**: Writes `"q\n"` to FFmpeg's stdin for graceful shutdown, waits up to 500ms, then calls `child.wait()`.
+- **Quality to CRF mapping**: `lossless` → 0, `high` → 18, `medium` → 23, `low` → 28.
+- **FFmpeg search order**: 1) exe directory → `ffmpeg.exe`, 2) exe directory → `resources/ffmpeg.exe`, 3) parent of exe → `resources/ffmpeg.exe`, 4) `PATH` fallback.
+- **Stop mechanism**: Writes `"q\n"` to FFmpeg's stdin, waits 300ms, drops stdin, then calls `child.wait()`. Uses `CREATE_NO_WINDOW` (0x08000000) to prevent a console window.
 
 ### 3. Overlay (`src-tauri/src/overlay.rs`)
 
 - **Responsibility**: Create and manage two Tauri windows — the recording overlay and the settings window.
-- **Overlay window**: 180×44 px, transparent, no decorations, always-on-top, skips taskbar/Alt+Tab, not focusable. Positioned at top-right of the primary monitor (or the settings window's monitor) with a 20px margin.
-- **Settings window**: 520×480 px, non-resizable, centered on screen, titled "Dr. Record Settings".
+- **Overlay window**: 180×44 px, transparent, no decorations, always-on-top, skips taskbar/Alt+Tab, not focusable, no shadow, cursor hidden. Positioned at top-right of the settings window's monitor (or primary monitor) with a 20px right/top margin.
+- **Settings window**: 520×480 px, non-resizable, centered on screen, titled "Dr. Record Settings". Close button is intercepted to hide rather than destroy the window (the app stays alive in the tray).
 - **Window reuse**: Both window types check if an instance is already open before creating a new one.
 
 ### 4. Application Entry (`src-tauri/src/lib.rs`)
 
-- **Responsibility**: Glue all modules together. Registers the tray icon with a two-item menu (Settings, Quit). Registers the global hotkey. Handles app lifecycle (first-run detection, exit handling).
-- **Tray Icon**: Left-click opens settings; right-click shows menu. "Quit" stops any active recording, closes the overlay, and exits.
-- **IPC Commands**: `start_rec`, `stop_rec`, `get_status`, `get_elapsed_secs`, `load_config`, `save_config`, `get_output_path`, `setup_first_run`, `open_settings_window`.
-- **Shortcut Parsing**: Accepts strings like `"Ctrl+Shift+R"`, `"Alt+F1"`, `"Win+S"`. Supports modifier keys (Ctrl, Alt, Shift, Win/Cmd) and common keys (F1-F12, letters, digits, Space, Escape, etc.).
+- **Responsibility**: Glue all modules together. Registers the tray icon with a two-item menu (Settings, Quit). Registers the global hotkey. Creates the settings window on startup. Handles exit lifecycle.
+- **Tray Icon**: Left-click opens settings; right-click shows menu with "Settings" and "Quit". "Quit" stops any active recording, closes the overlay, and exits.
+- **IPC Commands**: `start_rec`, `stop_rec`, `get_status`, `get_elapsed_secs`, `load_config`, `save_config`, `get_output_path`, `open_settings_window`, `reload_hotkey`, `hide_settings`, `get_display_info`.
+- **Auto-start**: On Windows, sets/removes the `Dr.Record` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` via the `winreg` crate. Applied in `save_config` and on app setup.
+- **Exit handling**: `ExitRequested` events with no exit code are intercepted via `api.prevent_exit()`, keeping the app alive in the system tray. The app exits only via the tray menu "Quit" item.
 
 ### 5. Frontend — Settings Window (`src/main.js`)
 
 - **Responsibility**: User interface for configuration and status monitoring.
-- **Features**: Directory picker (native dialog), hotkey capture (keyboard listener), recording mode radio buttons, overlay toggle, status indicator (idle/recording), test recording button, notification bar.
-- **Event listeners**: `status-changed` (polled and event-driven), `recording-error`.
+- **Features**: Directory picker (native dialog via `@tauri-apps/plugin-dialog`), hotkey capture (keyboard listener with modifier detection), recording mode radio buttons, framerate/quality dropdowns, overlay toggle, auto-start toggle, status indicator (idle/recording) with pulsing dot, test recording button (5s), display info (resolution + refresh rate), notification bar.
+- **Event listeners**: `status-changed`, `recording-error`.
+- **Flow**: On save, config is persisted via `save_config`, hotkey is re-registered via `reload_hotkey`, and the settings window auto-hides after 1.2 seconds via `hide_settings`.
 
 ### 6. Frontend — Overlay (`src/overlay.js`)
 
 - **Responsibility**: Display a live elapsed timer during recording.
-- **Mechanism**: Polls `get_elapsed_secs` every second via `setInterval`. Listens for `recording-stopped` to close itself.
+- **Mechanism**: Polls `get_elapsed_secs` every second via `setInterval`. Formats time as `MM:SS`. Listens for `recording-stopped` to clear the interval and close the window. Cleans up on `beforeunload`.
 
 ### 7. Tests
 
-- **`tests/TEST_PLAN.md`**: 821 black-box test cases covering installation, first launch, settings, hotkeys, recording engine, overlay, system tray, file output, multi-monitor, edge cases, configuration, and performance.
-- **`tests/Run-Tests.ps1`**: Automated PowerShell test runner. Validates binary integrity, config persistence (including corruption recovery), FFmpeg capabilities, basic recording, video file validation, process management (singleton), resource usage, and config stress testing.
+- **`tests/TEST_PLAN.md`**: 1084 black-box test cases (612 automated, 472 manual) across 12 categories: Installation, First Launch, Settings Window, Hotkey System, Recording Engine, Overlay, System Tray, File Output, Multi-Monitor, Edge Cases & Errors, Configuration, and Performance.
+- **`tests/Run-Tests.ps1`**: Automated PowerShell e2e test runner. Accepts `-BinaryPath`, `-TestOutputDir`, `-SkipAppLaunch`, `-Verbose` parameters. Sections: Environment (binary check, FFmpeg capabilities), First Launch, Config Persistence, Config Recovery (corrupted/partial/empty/read-only), Recording Pipeline (direct FFmpeg: quality, fps, duration, paths), App Lifecycle, Resource Usage, Edge Cases, Binary Integrity, Recording Output Quality. Outputs a CSV results file. Exits with code 1 on any failure.
 
 ---
 
@@ -261,20 +273,22 @@ All commands are invoked from JavaScript via `@tauri-apps/api/core`'s `invoke()`
 | `stop_rec` | — | `Result<Option<String>, String>` — output file path | Stop screen recording |
 | `get_status` | — | `Result<bool, String>` — true if recording | Check recording state |
 | `get_elapsed_secs` | — | `Result<u64, String>` — elapsed seconds | Get recording duration |
-| `load_config` | — | `Result<Config, String>` | Load persisted config |
-| `save_config` | `{ config: Config }` | `Result<(), String>` | Persist config |
-| `get_output_path` | — | `Result<Option<String>, String>` | Get current output path |
-| `setup_first_run` | — | `Result<(), String>` | Mark first-run complete, register hotkey |
-| `open_settings_window` | — | `Result<(), String>` | Open settings window |
+| `load_config` | — | `Result<Config, String>` | Load persisted config from disk |
+| `save_config` | `{ config: Config }` | `Result<(), String>` | Persist config to disk; also applies auto-start registry entry |
+| `get_output_path` | — | `Result<Option<String>, String>` | Get current recording output path |
+| `open_settings_window` | — | `Result<(), String>` | Show the settings window (creates if needed) |
+| `reload_hotkey` | `{ hotkey: String }` | `Result<(), String>` | Unregister all shortcuts, register a new hotkey |
+| `hide_settings` | — | `Result<(), String>` | Hide the settings window (does not close the app) |
+| `get_display_info` | — | `Result<{ width, height, refreshRate }, String>` | Get primary monitor resolution and refresh rate via Windows `GetSystemMetrics` |
 
 ### Tauri Events (Rust → Frontend)
 
-| Event | Payload | Purpose |
-|---|---|---|
-| `recording-started` | `String` — output path | Fired when recording begins |
-| `recording-stopped` | `Option<String>` — output path | Fired when recording ends |
-| `recording-error` | `String` — error message | Fired when recording fails |
-| `status-changed` | `String` — `"recording"` or `"stopped"` | Fired on state transitions |
+| Event | Payload | Direction | Purpose |
+|---|---|---|---|
+| `recording-started` | `String` — output file path | Rust → JS | Fired when recording begins |
+| `recording-stopped` | `Option<String>` — output file path | Rust → JS | Fired when recording ends (overlay uses this to close itself) |
+| `recording-error` | `String` — error message | Rust → JS | Fired when recording fails |
+| `status-changed` | `String` — `"recording"` or `"stopped"` | Rust → JS | Fired on state transitions — triggers UI status update |
 
 ### Plugin APIs Used
 
@@ -282,16 +296,17 @@ All commands are invoked from JavaScript via `@tauri-apps/api/core`'s `invoke()`
 |---|---|---|
 | `tauri-plugin-dialog` | Native folder picker for output directory selection | `dialog:allow-open` |
 | `tauri-plugin-global-shortcut` | Register/unregister the toggle hotkey | `global-shortcut:allow-register`, `global-shortcut:allow-unregister`, `global-shortcut:allow-is-registered` |
-| `tauri-plugin-shell` | Spawn FFmpeg subprocess | `shell:allow-spawn`, `shell:allow-stdin-write`, `shell:allow-kill` |
+| `tauri-plugin-shell` | Spawn and interact with FFmpeg subprocess | `shell:allow-spawn`, `shell:allow-stdin-write`, `shell:allow-kill` |
 
 ### External API: FFmpeg
 
-Dr. Record invokes `ffmpeg` as a subprocess with no API contract beyond the command-line interface. The app assumes FFmpeg is installed and available in `PATH`. It uses the following FFmpeg capabilities:
+Dr. Record invokes `ffmpeg` as a subprocess with no API contract beyond the command-line interface. The app searches for FFmpeg in the following order: executable directory, `resources/` directory, and `PATH`. It uses the following FFmpeg capabilities:
 
 - **Input device**: `gdigrab` (Windows Desktop Duplication API via GDI)
 - **Video encoder**: `libx264`
 - **Pixel format**: `yuv420p`
 - **Preset**: `ultrafast` (minimal encoding latency)
+- **Quality (CRF)**: varies by setting: 0 (lossless), 18 (high), 23 (medium), 28 (low)
 
 ---
 
@@ -321,9 +336,10 @@ Not applicable. This project does not use a database. All persistent state is st
   "output_dir": "C:\\Users\\<user>\\Videos",
   "hotkey": "Ctrl+Shift+R",
   "recording_mode": "fullscreen",
-  "framerate": 30,
+  "framerate": 60,
+  "quality": "high",
   "show_overlay": true,
-  "first_run": true
+  "auto_start": false
 }
 ```
 
@@ -332,9 +348,10 @@ Not applicable. This project does not use a database. All persistent state is st
 | `output_dir` | string | User's Videos folder | Directory where `.mp4` files are saved |
 | `hotkey` | string | `"Ctrl+Shift+R"` | Global shortcut to toggle recording |
 | `recording_mode` | string | `"fullscreen"` | Screen area to capture: `"fullscreen"`, `"multimonitor"`, or `"window"` |
-| `framerate` | number | `30` | Target frames per second (not currently exposed in settings UI) |
+| `framerate` | number | `60` | Target frames per second (0 = Auto, defaults to 60 in the recorder) |
+| `quality` | string | `"high"` | Encoding quality: `"lossless"` (CRF 0), `"high"` (CRF 18), `"medium"` (CRF 23), `"low"` (CRF 28) |
 | `show_overlay` | boolean | `true` | Whether to show the recording timer overlay |
-| `first_run` | boolean | `true` | Tracks if the app has been configured at least once |
+| `auto_start` | boolean | `false` | Whether to auto-start on Windows login (via `HKCU\...\Run` registry key) |
 
 ### `tauri.conf.json`
 
@@ -346,20 +363,23 @@ Location: `src-tauri/tauri.conf.json`
 - **`build.beforeBuildCommand`**: `"npm run build"` — builds frontend before `tauri build`.
 - **`app.windows`**: `[]` — no default windows are created; the app creates windows programmatically via `overlay.rs`.
 - **`app.security.csp`**: `null` — Content Security Policy is disabled (the app loads only local assets).
-- **`bundle.targets`**: `"all"` — produces both `.msi` (WiX) and `.exe` (NSIS) installers.
+- **`bundle.targets`**: `"nsis"` — produces only `.exe` (NSIS) installer.
 - **`bundle.windows.nsis.installMode`**: `"currentUser"` — per-user installation (no admin required).
+- **`bundle.resources`**: `{ "../resources/ffmpeg/ffmpeg.exe": "ffmpeg.exe" }` — bundles FFmpeg inside the installer.
 
 ### `vite.config.ts`
 
-- Multi-entry build: `index.html` (settings) and `overlay.html` (overlay) are separate Vite entry points.
-- Dev server on port 1420, strict port mode.
+- Multi-entry build: `index.html` (settings) and `overlay.html` (overlay) are separate Vite entry points via `rollupOptions.input`.
+- Dev server on port 1420, strict port mode, host binding from `TAURI_DEV_HOST`.
 - HMR WebSocket on port 1421 when `TAURI_DEV_HOST` is set.
 - `clearScreen: false` prevents Vite from clearing Tauri's terminal output.
 - Ignores `src-tauri/` in file watcher.
+- Build target: `es2021`, `chrome100`, `safari13`.
+- Minification via `esbuild` (or disabled with source maps when `TAURI_DEBUG` is set).
 
 ### Capabilities (`src-tauri/capabilities/default.json`)
 
-Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are granted permissions for core window management, shell execution, native dialogs, and global shortcuts. See the full list in the file itself.
+Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are granted permissions for core window management, shell execution (spawn, stdin-write, kill), native dialogs (open, save, message, ask), and global shortcuts (register, unregister, is-registered). See the full list in the file itself.
 
 ---
 
@@ -374,25 +394,26 @@ Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are
 | `tauri-plugin-dialog` | Native directory picker dialog |
 | `tauri-plugin-global-shortcut` | Register OS-level global hotkeys |
 | `serde` + `serde_json` | Serialize/deserialize configuration to/from JSON |
-| `dirs` | Resolve standard system directories (Videos, AppData) |
+| `dirs` | Resolve standard system directories (Videos, AppData, Config) |
 | `chrono` | Timestamp formatting for output filenames |
-| `tracing` + `tracing-subscriber` | Structured logging with env-filter support |
+| `tracing` + `tracing-subscriber` | Structured logging with env-filter support (`dr_record=info`) |
 | `tokio` (features: `full`) | Async runtime (required by Tauri) |
+| `winreg` | Windows registry access for auto-start feature |
 
 ### npm Packages (`package.json`)
 
 | Package | Purpose |
 |---|---|
-| `@tauri-apps/api` | Frontend library for Tauri IPC (`invoke`, `listen`) |
-| `@tauri-apps/plugin-dialog` | Frontend bindings for the dialog plugin |
-| `@tauri-apps/plugin-global-shortcut` | Frontend bindings for the shortcut plugin (unused directly — logic is Rust-side) |
-| `@tauri-apps/plugin-shell` | Frontend bindings for the shell plugin (unused directly) |
+| `@tauri-apps/api` | Frontend library for Tauri IPC (`invoke`, `listen`) and event system |
+| `@tauri-apps/plugin-dialog` | Frontend bindings for the native dialog plugin (folder picker) |
+| `@tauri-apps/plugin-global-shortcut` | Frontend bindings (unused directly — all shortcut logic is Rust-side) |
+| `@tauri-apps/plugin-shell` | Frontend bindings (unused directly) |
 | `@tauri-apps/cli` | Tauri CLI for `tauri dev` and `tauri build` |
 | `vite` | Frontend bundler and dev server |
 
 ### External Runtime Dependency
 
-- **FFmpeg** — used for all screen capture and encoding. When installed via the official installer (NSIS/MSI), FFmpeg is bundled alongside the app. When building from source, the app falls back to `ffmpeg` in `PATH`.
+- **FFmpeg** — used for all screen capture and encoding. When installed via the NSIS installer, `ffmpeg.exe` is bundled alongside the app binary (configured in `tauri.conf.json` resources). When building from source, the app searches the executable directory, then falls back to `PATH`.
 
 ---
 
@@ -403,11 +424,11 @@ Tauri v2 capability-based permission model. All windows (`"windows": ["*"]`) are
 1. **Windows 10 or 11** (64-bit).
 2. **WebView2 Runtime** — Ships with Windows 11 and recent Windows 10 builds. If missing, the installer will prompt you to install it.
 
-> FFmpeg is bundled inside the installer. No separate installation needed.
+> FFmpeg is bundled inside the NSIS installer. No separate installation needed.
 
 ### From Release Build
 
-1. Download the latest installer from the [Releases](https://github.com/Babar-Meet/Dr.Record/releases) page (`.msi` or `.exe`).
+1. Download the latest installer from the [Releases](https://github.com/Babar-Meet/Dr.Record/releases) page (`.exe`).
 2. Run the installer. No administrator privileges are required (per-user install).
 3. Launch Dr. Record from the Start Menu.
 
@@ -429,12 +450,12 @@ Or build manually:
 ```powershell
 npm install
 npm run build          # Build frontend
-npm run tauri build    # Build Tauri app + installer
+npm run tauri build    # Build Tauri app + NSIS installer
 ```
 
 > When building manually, make sure `ffmpeg` is in `PATH` for development, or copy `ffmpeg.exe` to `resources/ffmpeg/` before running `npm run tauri build` to include it in the installer.
 
-The installers will be in `src-tauri/target/release/bundle/`.
+The installer will be at `src-tauri/target/release/bundle/nsis/`.
 
 ---
 
@@ -450,7 +471,7 @@ npm run tauri dev
 ### Production Build
 
 ```powershell
-# Build frontend + Tauri app + installers
+# Build frontend + Tauri app + NSIS installer
 npm run tauri build
 ```
 
@@ -474,12 +495,13 @@ After building, run the binary directly:
 
 ## How It Works
 
-1. **Launch**: The app starts, reads `config.json` from `%APPDATA%\dr-record\`, creates a system tray icon, and either shows the settings window (first run) or registers the hotkey and runs in the background.
-2. **First-time setup**: The user picks an output directory, optionally changes the hotkey and recording mode, and clicks "Save & Start". The config is persisted and the hotkey is activated.
-3. **Recording toggle**: From any application, pressing the hotkey starts FFmpeg screen capture. A transparent overlay appears at the top-right of the screen showing a red dot, "REC" label, and a timer. Pressing the hotkey again sends a graceful stop signal to FFmpeg, saves the `.mp4` file, and hides the overlay.
-4. **File output**: Recordings are saved to the configured directory with filenames like `DrRecord_Screen_2026-07-07_14-30-00.mp4`.
-5. **Accessing settings**: Left-click the tray icon to open settings at any time. Right-click for "Settings" and "Quit" options.
-6. **Quitting**: Via the tray menu. If recording, the current recording is stopped and saved before the app exits.
+1. **Launch**: The app starts, reads `config.json` from `%APPDATA%\dr-record\`, creates the system tray icon, registers the global hotkey, and always opens the settings window. This window appears on every launch — closing it hides the app to the system tray rather than quitting.
+2. **Configuration**: The user can set the output directory, hotkey, recording mode, framerate, quality, overlay visibility, and auto-start preference. Clicking "Save & Start" persists the config, re-registers the hotkey, and auto-hides the settings window.
+3. **Recording toggle**: From any application, pressing the hotkey (default `Ctrl+Shift+R`) starts FFmpeg screen capture. A transparent overlay appears at the top-right of the screen showing a red pulsing dot, "REC" label, and an elapsed timer (MM:SS). The overlay polls the elapsed time every second. Pressing the hotkey again sends `q\n` to FFmpeg's stdin for graceful shutdown, waits for the process to exit, saves the `.mp4` file, and hides the overlay.
+4. **File output**: Recordings are saved to the configured directory with filenames like `DrRecord_Screen_2026-07-07_14-30-00.mp4`. The mode label in the filename varies: `Screen` (fullscreen), `Multi` (all monitors), or `Window` (active window).
+5. **Accessing settings**: Left-click the tray icon to show settings at any time. Right-click for "Settings" and "Quit" options.
+6. **Auto-start**: If enabled, the app registers itself in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` for automatic startup on user login.
+7. **Quitting**: Via the tray menu "Quit" item. If a recording is in progress, it is stopped and saved before the app exits. Closing the settings window via the X button or Alt+F4 only hides it — the app continues running in the system tray.
 
 ---
 
