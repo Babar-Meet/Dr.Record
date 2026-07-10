@@ -1,0 +1,9 @@
+## What's New in v1.1.0
+
+- **Run on Startup Installer Option:** Added a new custom checkbox for "Run on Windows startup" directly on the NSIS setup finish page.
+- **Independent Shortcut Customization:** Restored the standard "Create Desktop Shortcut" checkbox so users have full freedom to toggle both settings independently.
+- **Silent Boot (System Tray):** The application now properly detects the --autostart flag from the registry to launch silently into the system tray on boot without flashing the GUI.
+- **Registry Sync:** The app's settings automatically sync with the registry to correctly reflect the installer's startup choice.
+- **No More Command Prompts:** Fixed an issue where triggering a recording via hotkey would briefly flash a command prompt window by explicitly silencing the internal fmpeg process.
+- **Robust Output Directories:** The app now automatically handles missing recording directories by creating them automatically on the fly.
+- **UI & Dual Monitor Tweaks:** Expanded the Settings window size and improved fallback handling for multi-monitor displays when determining the overlay's home monitor.

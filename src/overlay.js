@@ -26,9 +26,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     window.close();
   });
 
+  const unlistenStatus = await listen("status-changed", (e) => {
+    if (e.payload === "saving") {
+      clearInterval(timer);
+      const label = document.querySelector(".rec-label");
+      if (label) label.textContent = "SAVING";
+      const dot = document.getElementById("recDot");
+      if (dot) dot.style.backgroundColor = "orange";
+      const time = document.getElementById("recTime");
+      if (time) time.style.display = "none";
+    }
+  });
+
   window.addEventListener("beforeunload", () => {
     clearInterval(timer);
     unlistenStop();
+    unlistenStatus();
   });
 
   updateTimer();

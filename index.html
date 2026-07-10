@@ -27,25 +27,26 @@
         <input type="text" id="hotkeyInput" class="picker-input hotkey-input" readonly placeholder="Press a key combination..." />
         <button id="captureHotkeyBtn" class="btn btn-secondary">Capture</button>
       </div>
-      <p class="hint">Press the button then type your shortcut (e.g. Ctrl+Shift+R)</p>
+      <p class="hint">Press the button then type your shortcut (e.g. Ctrl+Shift+Alt+R)</p>
     </div>
 
     <div class="setting-group">
-      <label class="setting-label">Recording Mode</label>
-      <div class="radio-group">
-        <label class="radio-item">
-          <input type="radio" name="mode" value="fullscreen" checked />
-          <span>Full Screen</span>
-        </label>
-        <label class="radio-item">
-          <input type="radio" name="mode" value="multimonitor" />
-          <span>All Monitors</span>
-        </label>
-        <label class="radio-item">
-          <input type="radio" name="mode" value="window" />
-          <span>Active Window</span>
-        </label>
+      <label class="setting-label" for="sourceSelect">Recording Source</label>
+      
+      <!-- Live Preview Area -->
+      <div id="sourcePreview" class="source-preview-container">
+        <div class="source-preview-img-wrapper" id="previewImgWrapper">
+          <div class="source-preview-placeholder">No preview</div>
+        </div>
       </div>
+
+      <div class="source-row">
+        <select id="sourceSelect" class="picker-input select-input source-select">
+          <option value="all">⊞  All Screens</option>
+        </select>
+        <button id="refreshSourcesBtn" class="btn btn-secondary btn-icon" title="Refresh sources">↺</button>
+      </div>
+      <p class="hint" id="sourceHint">Records the full virtual desktop (all monitors combined).</p>
     </div>
 
     <div class="setting-row">
@@ -68,6 +69,30 @@
           <option value="high">High</option>
           <option value="lossless">Lossless</option>
         </select>
+      </div>
+    </div>
+
+    <!-- AUDIO SETTINGS -->
+    <div class="setting-group">
+      <label class="setting-label">
+        <input type="checkbox" id="recordSystemAudio" checked />
+        <span>Record System Audio</span>
+      </label>
+      <div class="audio-level-bar">
+        <div class="audio-level-fill" id="sysAudioLevel" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <label class="setting-label">Microphone</label>
+      <div class="source-row">
+        <select id="micSelect" class="picker-input select-input source-select">
+          <option value="None">None</option>
+        </select>
+        <button id="refreshMicsBtn" class="btn btn-secondary btn-icon" title="Refresh Microphones">↺</button>
+      </div>
+      <div class="audio-level-bar" style="margin-top: 8px;">
+        <div class="audio-level-fill" id="micAudioLevel" style="width: 0%"></div>
       </div>
     </div>
 

@@ -8,9 +8,11 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing;
+use xcap::{Monitor, Window};
+use crate::audio::AudioRecorder;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -20,9 +22,16 @@ pub struct RecorderState {
     pub is_recording: AtomicBool,
     pub process: Mutex<Option<Child>>,
     pub stdin: Mutex<Option<ChildStdin>>,
-    pub start_time: Mutex<Option<Instant>>,
     pub output_path: Mutex<Option<String>>,
     pub hotkey_str: Mutex<String>,
+    pub watch_hwnd: Mutex<usize>,
+    pub sys_audio: Mutex<Option<AudioRecorder>>,
+    pub mic_audio: Mutex<Option<AudioRecorder>>,
+    pub sys_audio_path: Mutex<Option<String>>,
+    pub mic_audio_path: Mutex<Option<String>>,
+    pub start_time: Mutex<Option<Instant>>,
+    pub preview_sys_audio: Mutex<Option<AudioRecorder>>,
+    pub preview_mic_audio: Mutex<Option<AudioRecorder>>,
 }
 
 impl RecorderState {
@@ -31,25 +40,38 @@ impl RecorderState {
             is_recording: AtomicBool::new(false),
             process: Mutex::new(None),
             stdin: Mutex::new(None),
-            start_time: Mutex::new(None),
             output_path: Mutex::new(None),
             hotkey_str: Mutex::new("Ctrl+Shift+R".to_string()),
+            watch_hwnd: Mutex::new(0),
+            sys_audio: Mutex::new(None),
+            mic_audio: Mutex::new(None),
+            sys_audio_path: Mutex::new(None),
+            mic_audio_path: Mutex::new(None),
+            start_time: Mutex::new(None),
+            preview_sys_audio: Mutex::new(None),
+            preview_mic_audio: Mutex::new(None),
         }
     }
 }
 
-pub fn generate_output_path(output_dir: &str, mode: &str) -> String {
+fn source_label(source: &str) -> &str {
+    if source.starts_with("monitor:") {
+        "Monitor"
+    } else if source.starts_with("window:") {
+        "Window"
+    } else {
+        "Screen"
+    }
+}
+
+pub fn generate_output_path(output_dir: &str, source: &str) -> String {
     let now = Local::now();
     let timestamp = now.format("%Y-%m-%d_%H-%M-%S");
-    let mode_label = match mode {
-        "window" => "Window",
-        "multimonitor" => "Multi",
-        _ => "Screen",
-    };
+    let label = source_label(source);
     format!(
         "{}\\DrRecord_{}_{}.mp4",
         output_dir.trim_end_matches('\\').trim_end_matches('/'),
-        mode_label,
+        label,
         timestamp
     )
 }
@@ -63,7 +85,19 @@ pub fn quality_to_crf(quality: &str) -> u32 {
     }
 }
 
-fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32, quality: &str) -> Vec<String> {
+/// Build FFmpeg args for gdigrab.
+///
+/// Sources:
+///   "all"         – full virtual desktop
+///   "monitor:N"   – single monitor, offset + video_size
+///   "window:HWND" – `title=<title>` input
+fn build_ffmpeg_args(
+    output_path: &str,
+    source: &str,
+    framerate: u32,
+    quality: &str,
+    monitors: &[MonitorInfo],
+) -> Vec<String> {
     let crf = quality_to_crf(quality);
     let fps = if framerate == 0 { 60 } else { framerate };
 
@@ -73,17 +107,26 @@ fn build_ffmpeg_args(output_path: &str, mode: &str, framerate: u32, quality: &st
         "-framerate".to_string(), fps.to_string(),
     ];
 
-    match mode {
-        "multimonitor" | "window" => {
-            args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
-        }
-        _ => {
+    if source.starts_with("monitor:") {
+        let idx: usize = source["monitor:".len()..].parse().unwrap_or(0);
+        if let Some(mon) = monitors.get(idx) {
+            let mut w = mon.width;
+            let mut h = mon.height;
+            if w % 2 != 0 { w -= 1; }
+            if h % 2 != 0 { h -= 1; }
+            
             args.extend_from_slice(&[
-                "-offset_x".to_string(), "0".to_string(),
-                "-offset_y".to_string(), "0".to_string(),
+                "-offset_x".to_string(), mon.x.to_string(),
+                "-offset_y".to_string(), mon.y.to_string(),
+                "-video_size".to_string(), format!("{}x{}", w, h),
                 "-i".to_string(), "desktop".to_string(),
             ]);
+        } else {
+            args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
         }
+    } else {
+        // "all"
+        args.extend_from_slice(&["-i".to_string(), "desktop".to_string()]);
     }
 
     args.extend_from_slice(&[
@@ -125,23 +168,166 @@ fn ffmpeg_on_path() -> bool {
     cmd.arg("-version")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-        
+
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
     cmd.spawn().is_ok()
 }
 
+// ---------------------------------------------------------------------------
+// Source enumeration types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MonitorInfo {
+    pub index: usize,
+    pub label: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WindowInfo {
+    pub hwnd: usize,
+    pub title: String,
+}
+
+// ---------------------------------------------------------------------------
+// Windows API source enumeration
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+pub fn enum_monitors() -> Vec<MonitorInfo> {
+    use std::ffi::c_void;
+    use std::mem;
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, MONITORINFOEXW,
+    };
+
+    // MONITORINFOF_PRIMARY is 0x00000001 per MSDN — not re-exported by windows-sys
+    const MONITORINFOF_PRIMARY: u32 = 0x00000001;
+
+    struct Collector {
+        monitors: Vec<MonitorInfo>,
+    }
+
+    unsafe extern "system" fn callback(
+        hmonitor: *mut c_void,
+        _hdc: *mut c_void,
+        _lprect: *mut RECT,
+        lparam: isize,
+    ) -> i32 {
+        let col = &mut *(lparam as *mut Collector);
+        let idx = col.monitors.len();
+
+        let mut mi: MONITORINFOEXW = mem::zeroed();
+        mi.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+        if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _) != 0 {
+            let rc = mi.monitorInfo.rcMonitor;
+            let is_primary = (mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+            let label = if is_primary {
+                format!("Monitor {} (Primary)", idx + 1)
+            } else {
+                format!("Monitor {}", idx + 1)
+            };
+            col.monitors.push(MonitorInfo {
+                index: idx,
+                label,
+                x: rc.left,
+                y: rc.top,
+                width: (rc.right - rc.left) as u32,
+                height: (rc.bottom - rc.top) as u32,
+                is_primary,
+            });
+        }
+        1
+    }
+
+    let mut col = Collector { monitors: Vec::new() };
+    unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(callback),
+            &mut col as *mut _ as isize,
+        );
+    }
+    // Primary first, then stable index
+    col.monitors.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
+    for (i, m) in col.monitors.iter_mut().enumerate() {
+        m.index = i;
+        if m.is_primary && !m.label.contains("Primary") {
+            m.label = format!("Monitor {} (Primary)", i + 1);
+        } else if !m.is_primary {
+            m.label = format!("Monitor {}", i + 1);
+        }
+    }
+    col.monitors
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn enum_monitors() -> Vec<MonitorInfo> {
+    vec![MonitorInfo {
+        index: 0,
+        label: "Monitor 1 (Primary)".to_string(),
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        is_primary: true,
+    }]
+}
+
+
+
+pub fn get_thumbnail(source: &str) -> Option<String> {
+    if source.starts_with("monitor:") {
+        let idx: usize = source["monitor:".len()..].parse().unwrap_or(0);
+        let monitors = Monitor::all().ok()?;
+        if let Some(m) = monitors.get(idx) {
+            let image = m.capture_image().ok()?;
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            image.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
+            use base64::Engine;
+            return Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&buf)));
+        }
+    } else if source.starts_with("window:") {
+        let hwnd: usize = source["window:".len()..].parse().unwrap_or(0);
+        let windows = Window::all().ok()?;
+        if let Some(w) = windows.iter().find(|w| w.id().unwrap_or(0) as usize == hwnd) {
+            let image = w.capture_image().ok()?;
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            image.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
+            use base64::Engine;
+            return Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&buf)));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// start / stop recording
+// ---------------------------------------------------------------------------
+
 pub fn start_recording(
-    state: &RecorderState,
-    output_dir: &str,
-    mode: &str,
-    framerate: u32,
-    quality: &str,
+    state: &Arc<RecorderState>,
+    config: &crate::config::Config,
+    app_handle: &tauri::AppHandle,
 ) -> Result<String, String> {
     if state.is_recording.load(Ordering::SeqCst) {
         return Err("Already recording".to_string());
     }
+
+    // Stop previews before starting recording
+    stop_audio_previews(state);
 
     let ffmpeg_path = find_ffmpeg();
     let ff_exists = if ffmpeg_path == "ffmpeg" {
@@ -153,15 +339,25 @@ pub fn start_recording(
         return Err("FFmpeg not found. Ensure ffmpeg.exe is bundled or on PATH.".to_string());
     }
 
-    std::fs::create_dir_all(output_dir).unwrap_or_else(|e| tracing::warn!("Failed to create output dir: {}", e));
-    let output_path = generate_output_path(output_dir, mode);
-    let args = build_ffmpeg_args(&output_path, mode, framerate, quality);
+    let monitors = enum_monitors();
+
+    std::fs::create_dir_all(&config.output_dir)
+        .unwrap_or_else(|e| tracing::warn!("Failed to create output dir: {}", e));
+
+    let output_path = generate_output_path(&config.output_dir, &config.recording_source);
+    let video_path = output_path.replace(".mp4", "_video.mp4"); // write temp video file
+    
+    let args = build_ffmpeg_args(
+        &video_path,
+        &config.recording_source,
+        config.framerate,
+        &config.quality,
+        &monitors,
+    );
     tracing::info!("FFmpeg args: {:?}", args);
 
     let mut cmd = Command::new(&ffmpeg_path);
-    cmd.args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null());
+    cmd.args(&args).stdin(Stdio::piped()).stdout(Stdio::null());
 
     #[cfg(target_os = "windows")]
     {
@@ -177,17 +373,88 @@ pub fn start_recording(
     #[cfg(not(target_os = "windows"))]
     cmd.stderr(Stdio::null());
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to start ffmpeg: {}", e))?;
 
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| "Failed to capture ffmpeg stdin".to_string())?;
+
+    // Audio Setup
+    if config.record_system_audio {
+        let mut sys_recorder = AudioRecorder::new();
+        let sys_path = output_path.replace(".mp4", "_sys.wav");
+        if let Err(e) = sys_recorder.start(app_handle.clone(), true, None, Some(sys_path.clone()), "system".to_string()) {
+            tracing::warn!("Failed to start system audio: {}", e);
+        } else {
+            *lock(&state.sys_audio) = Some(sys_recorder);
+            *lock(&state.sys_audio_path) = Some(sys_path);
+        }
+    }
+    
+    if config.microphone_name != "None" {
+        let mut mic_recorder = AudioRecorder::new();
+        let mic_path = output_path.replace(".mp4", "_mic.wav");
+        if let Err(e) = mic_recorder.start(app_handle.clone(), false, Some(config.microphone_name.clone()), Some(mic_path.clone()), "mic".to_string()) {
+            tracing::warn!("Failed to start mic audio: {}", e);
+        } else {
+            *lock(&state.mic_audio) = Some(mic_recorder);
+            *lock(&state.mic_audio_path) = Some(mic_path);
+        }
+    }
 
     state.is_recording.store(true, Ordering::SeqCst);
     *lock(&state.process) = Some(child);
     *lock(&state.stdin) = Some(stdin);
     *lock(&state.start_time) = Some(Instant::now());
     *lock(&state.output_path) = Some(output_path.clone());
+
+    // FFmpeg Watchdog thread
+    let state_clone_watchdog = Arc::clone(state);
+    let app_clone_watchdog = app_handle.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if !state_clone_watchdog.is_recording.load(Ordering::SeqCst) {
+                break; // Stopped normally
+            }
+
+            let mut exited = false;
+            if let Some(ref mut child) = *lock(&state_clone_watchdog.process) {
+                if let Ok(Some(_status)) = child.try_wait() {
+                    exited = true;
+                }
+            }
+
+            if exited {
+                tracing::error!("FFmpeg process exited unexpectedly!");
+                
+                let mut error_msg = "FFmpeg crashed unexpectedly. Please check your settings.".to_string();
+                #[cfg(target_os = "windows")]
+                {
+                    let log_path = std::env::temp_dir().join("dr-record-ffmpeg.log");
+                    if let Ok(content) = std::fs::read_to_string(&log_path) {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let tail = lines.iter().rev().take(15).rev().copied().collect::<Vec<&str>>().join("\n");
+                        if !tail.trim().is_empty() {
+                            error_msg = format!("FFmpeg Crash Log:\n{}", tail);
+                        }
+                    }
+                }
+
+                state_clone_watchdog.is_recording.store(false, Ordering::SeqCst);
+                *lock(&state_clone_watchdog.start_time) = None;
+                *lock(&state_clone_watchdog.process) = None;
+
+                use tauri::Emitter;
+                let _ = app_clone_watchdog.emit("recording-crashed", error_msg);
+                let _ = app_clone_watchdog.emit("status-changed", "stopped");
+                break;
+            }
+        }
+    });
 
     tracing::info!("Recording started: {}", output_path);
     Ok(output_path)
@@ -198,24 +465,123 @@ pub fn stop_recording(state: &RecorderState) -> Result<Option<String>, String> {
         return Err("Not recording".to_string());
     }
 
+    state.is_recording.store(false, Ordering::SeqCst);
     tracing::info!("Stopping recording...");
 
+    // Tell FFmpeg to finish cleanly
     if let Some(mut stdin) = lock(&state.stdin).take() {
         let _ = stdin.write_all(b"q\n");
         let _ = stdin.flush();
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        std::thread::sleep(std::time::Duration::from_millis(400));
         drop(stdin);
     }
 
+    // Wait for FFmpeg with a timeout; kill if needed
     if let Some(mut child) = lock(&state.process).take() {
-        let _ = child.wait();
-        tracing::info!("FFmpeg exited");
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                tracing::info!("FFmpeg already exited");
+            }
+            _ => {
+                let deadline = Instant::now() + std::time::Duration::from_secs(3);
+                loop {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        tracing::warn!("FFmpeg did not exit in time, killing");
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                tracing::info!("FFmpeg exited");
+            }
+        }
     }
 
-    state.is_recording.store(false, Ordering::SeqCst);
     *lock(&state.start_time) = None;
+    *lock(&state.start_time) = None;
+    *lock(&state.watch_hwnd) = 0;
 
+    if let Some(mut sys) = lock(&state.sys_audio).take() {
+        sys.stop();
+    }
+    if let Some(mut mic) = lock(&state.mic_audio).take() {
+        mic.stop();
+    }
+
+    let sys_path = lock(&state.sys_audio_path).take();
+    let mic_path = lock(&state.mic_audio_path).take();
     let path = lock(&state.output_path).take();
+
+    if let Some(final_path) = &path {
+        let video_path = final_path.replace(".mp4", "_video.mp4");
+        let ffmpeg_path = find_ffmpeg();
+        let mut mux_args = vec!["-y".to_string(), "-i".to_string(), video_path.clone()];
+
+        let mut audio_inputs = 0;
+        if let Some(sp) = &sys_path {
+            if std::path::Path::new(sp).exists() {
+                mux_args.extend_from_slice(&["-i".to_string(), sp.clone()]);
+                audio_inputs += 1;
+            }
+        }
+        if let Some(mp) = &mic_path {
+            if std::path::Path::new(mp).exists() {
+                mux_args.extend_from_slice(&["-i".to_string(), mp.clone()]);
+                audio_inputs += 1;
+            }
+        }
+
+        if audio_inputs > 0 {
+            if audio_inputs == 1 {
+                // One audio source, just map it
+                mux_args.extend_from_slice(&[
+                    "-c:v".to_string(), "copy".to_string(),
+                    "-c:a".to_string(), "aac".to_string(),
+                    "-map".to_string(), "0:v:0".to_string(),
+                    "-map".to_string(), "1:a:0".to_string(),
+                    final_path.clone()
+                ]);
+            } else {
+                // Mix two audio sources
+                mux_args.extend_from_slice(&[
+                    "-filter_complex".to_string(), "[1:a][2:a]amix=inputs=2[a]".to_string(),
+                    "-map".to_string(), "0:v".to_string(),
+                    "-map".to_string(), "[a]".to_string(),
+                    "-c:v".to_string(), "copy".to_string(),
+                    "-c:a".to_string(), "aac".to_string(),
+                    final_path.clone()
+                ]);
+            }
+        } else {
+            // No audio, just copy video to final path
+            mux_args.extend_from_slice(&[
+                "-c".to_string(), "copy".to_string(),
+                final_path.clone()
+            ]);
+        }
+
+        tracing::info!("Muxing with args: {:?}", mux_args);
+        
+        let mut cmd = Command::new(&ffmpeg_path);
+        cmd.args(&mux_args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        
+        if let Ok(mut mux_proc) = cmd.spawn() {
+            let _ = mux_proc.wait();
+        }
+
+        // Clean up temp files
+        let _ = std::fs::remove_file(&video_path);
+        if let Some(sp) = sys_path { let _ = std::fs::remove_file(sp); }
+        if let Some(mp) = mic_path { let _ = std::fs::remove_file(mp); }
+    }
+
     tracing::info!("Recording stopped: {:?}", path);
 
     Ok(path)
@@ -226,5 +592,40 @@ pub fn get_elapsed(state: &RecorderState) -> u64 {
         start.elapsed().as_secs()
     } else {
         0
+    }
+}
+
+pub fn start_audio_previews(
+    state: &Arc<RecorderState>,
+    config: &crate::config::Config,
+    app_handle: &tauri::AppHandle,
+) {
+    stop_audio_previews(state);
+
+    if config.record_system_audio {
+        let mut sys_recorder = AudioRecorder::new();
+        if let Err(e) = sys_recorder.start(app_handle.clone(), true, None, None, "system".to_string()) {
+            tracing::warn!("Failed to start system audio preview: {}", e);
+        } else {
+            *lock(&state.preview_sys_audio) = Some(sys_recorder);
+        }
+    }
+
+    if config.microphone_name != "None" {
+        let mut mic_recorder = AudioRecorder::new();
+        if let Err(e) = mic_recorder.start(app_handle.clone(), false, Some(config.microphone_name.clone()), None, "mic".to_string()) {
+            tracing::warn!("Failed to start mic audio preview: {}", e);
+        } else {
+            *lock(&state.preview_mic_audio) = Some(mic_recorder);
+        }
+    }
+}
+
+pub fn stop_audio_previews(state: &RecorderState) {
+    if let Some(mut sys) = lock(&state.preview_sys_audio).take() {
+        sys.stop();
+    }
+    if let Some(mut mic) = lock(&state.preview_mic_audio).take() {
+        mic.stop();
     }
 }

@@ -171,30 +171,37 @@ h1 {
 
 .btn-secondary:hover { background: var(--surface-hover); }
 
-.radio-group {
+.source-row {
   display: flex;
-  gap: 8px;
-}
-
-.radio-item {
-  display: flex;
-  align-items: center;
   gap: 6px;
-  font-size: 13px;
+  align-items: center;
+}
+
+.source-select {
+  flex: 1;
   cursor: pointer;
-  padding: 7px 14px;
-  background: #1c1c1c;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  transition: border-color 0.1s;
 }
 
-.radio-item:has(input:checked) {
-  border-color: var(--accent);
-  background: rgba(96, 205, 255, 0.08);
+.source-select optgroup {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.radio-item input { accent-color: var(--accent); }
+.source-select option {
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 0;
+}
+
+.btn-icon {
+  padding: 8px 10px;
+  font-size: 16px;
+  flex-shrink: 0;
+  min-width: 36px;
+}
 
 .settings-footer {
   display: flex;
@@ -223,6 +230,11 @@ h1 {
 
 .status-dot.recording {
   background: var(--red);
+  animation: pulse 1s infinite;
+}
+
+.status-dot.saving {
+  background: orange;
   animation: pulse 1s infinite;
 }
 
@@ -313,4 +325,52 @@ h1 {
 .notification.success {
   background: #1e3a2a;
   border-color: var(--green);
+}
+
+.source-preview-container {
+  margin-bottom: 12px;
+  background: #111;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 140px;
+  width: 100%;
+}
+
+.source-preview-img-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.source-preview-img-wrapper img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.source-preview-placeholder {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+.audio-level-bar {
+  width: 100%;
+  height: 6px;
+  background: #1c1c1c;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.audio-level-fill {
+  height: 100%;
+  background: var(--green);
+  transition: width 0.05s ease-out, background-color 0.1s;
 }

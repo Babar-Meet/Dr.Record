@@ -1,10 +1,14 @@
 mod config;
 mod overlay;
 mod recorder;
+mod audio;
 
 use config::Config;
 use overlay::{close_overlay, create_overlay_window, create_settings_window, show_settings};
-use recorder::{get_elapsed, start_recording, stop_recording, RecorderState};
+use recorder::{
+    enum_monitors, get_elapsed, start_recording, stop_recording, start_audio_previews, stop_audio_previews, MonitorInfo,
+    RecorderState, WindowInfo,
+};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -13,16 +17,22 @@ fn set_auto_start(enabled: bool) {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let key = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    if let Ok(run) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(key, winreg::enums::KEY_SET_VALUE) {
+    if let Ok(run) = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(key, winreg::enums::KEY_SET_VALUE)
+    {
         if enabled {
             if let Ok(exe) = std::env::current_exe() {
-                let _ = run.set_value("Dr.Record", &format!("\"{}\" --autostart", exe.to_string_lossy()));
+                let _ = run.set_value(
+                    "Dr.Record",
+                    &format!("\"{}\" --autostart", exe.to_string_lossy()),
+                );
             }
         } else {
             let _ = run.delete_value("Dr.Record");
         }
     }
 }
+
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -37,17 +47,24 @@ fn handle_hotkey(app: &AppHandle) {
     let rec = |s: &RecorderState| -> bool { s.is_recording.load(Ordering::SeqCst) };
 
     if rec(&state) {
+        let _ = app.emit("status-changed", "saving");
         match stop_recording(&state) {
             Ok(path) => {
                 tracing::info!("Saved: {:?}", path);
                 let _ = app.emit("recording-stopped", path);
                 close_overlay(app);
                 let _ = app.emit("status-changed", "stopped");
+                start_audio_previews(&state, &config, app);
             }
             Err(e) => tracing::error!("Stop error: {}", e),
         }
     } else {
-        match start_recording(&state, &config.output_dir, &config.recording_mode, config.framerate, &config.quality) {
+        let state_arc = Arc::clone(&*state);
+        match start_recording(
+            &state_arc,
+            &config,
+            app,
+        ) {
             Ok(path) => {
                 tracing::info!("Started: {}", path);
                 let _ = app.emit("recording-started", &path);
@@ -64,13 +81,50 @@ fn handle_hotkey(app: &AppHandle) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct Sources {
+    monitors: Vec<MonitorInfo>,
+    windows: Vec<WindowInfo>,
+}
+
+/// Return all monitors and visible windows so the UI can build its dropdown.
 #[tauri::command]
-fn start_rec(app: AppHandle, state: tauri::State<Arc<RecorderState>>) -> Result<String, String> {
+fn enum_sources() -> Result<Sources, String> {
+    Ok(Sources {
+        monitors: enum_monitors(),
+        windows: vec![],
+    })
+}
+
+#[tauri::command]
+fn get_microphones() -> Result<Vec<String>, String> {
+    Ok(audio::get_microphones())
+}
+
+#[tauri::command]
+fn get_thumbnail(source: String) -> Result<Option<String>, String> {
+    Ok(recorder::get_thumbnail(&source))
+}
+
+#[tauri::command]
+fn start_rec(
+    app: AppHandle,
+    state: tauri::State<Arc<RecorderState>>,
+) -> Result<String, String> {
     let config = Config::load();
     if state.is_recording.load(Ordering::SeqCst) {
         return Err("Already recording".to_string());
     }
-    let result = start_recording(&state, &config.output_dir, &config.recording_mode, config.framerate, &config.quality)?;
+    let state_arc = Arc::clone(&*state);
+    let result = start_recording(
+        &state_arc,
+        &config,
+        &app,
+    )?;
     if config.show_overlay {
         create_overlay_window(&app)?;
     }
@@ -79,13 +133,19 @@ fn start_rec(app: AppHandle, state: tauri::State<Arc<RecorderState>>) -> Result<
 }
 
 #[tauri::command]
-fn stop_rec(app: AppHandle, state: tauri::State<Arc<RecorderState>>) -> Result<Option<String>, String> {
+fn stop_rec(
+    app: AppHandle,
+    state: tauri::State<Arc<RecorderState>>,
+) -> Result<Option<String>, String> {
     if !state.is_recording.load(Ordering::SeqCst) {
         return Err("Not recording".to_string());
     }
+    let config = Config::load();
+    let _ = app.emit("status-changed", "saving");
     let result = stop_recording(&state)?;
     close_overlay(&app);
     let _ = app.emit("status-changed", "stopped");
+    start_audio_previews(&state, &config, &app);
     Ok(result)
 }
 
@@ -105,16 +165,27 @@ fn load_config() -> Result<Config, String> {
 }
 
 #[tauri::command]
-fn save_config(config: Config) -> Result<(), String> {
+fn save_config(app: AppHandle, state: tauri::State<Arc<RecorderState>>, config: Config) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     set_auto_start(config.auto_start);
     config.save();
+    
+    if !state.is_recording.load(Ordering::SeqCst) {
+        start_audio_previews(&state, &config, &app);
+    }
+    
     Ok(())
 }
 
 #[tauri::command]
-fn get_output_path(state: tauri::State<Arc<RecorderState>>) -> Result<Option<String>, String> {
-    Ok(state.output_path.lock().unwrap_or_else(|e| e.into_inner()).clone())
+fn get_output_path(
+    state: tauri::State<Arc<RecorderState>>,
+) -> Result<Option<String>, String> {
+    Ok(state
+        .output_path
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone())
 }
 
 #[tauri::command]
@@ -124,12 +195,20 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn reload_hotkey(app: AppHandle, hotkey: String, state: tauri::State<Arc<RecorderState>>) -> Result<(), String> {
+fn reload_hotkey(
+    app: AppHandle,
+    hotkey: String,
+    state: tauri::State<Arc<RecorderState>>,
+) -> Result<(), String> {
     tracing::info!("Reloading hotkey: {}", hotkey);
     let _ = app.global_shortcut().unregister_all();
-    app.global_shortcut().register(hotkey.as_str())
+    app.global_shortcut()
+        .register(hotkey.as_str())
         .map_err(|e| format!("Failed to register '{}': {}", hotkey, e))?;
-    *state.hotkey_str.lock().unwrap_or_else(|e| e.into_inner()) = hotkey.clone();
+    *state
+        .hotkey_str
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = hotkey.clone();
     tracing::info!("Hotkey active: {}", hotkey);
     Ok(())
 }
@@ -160,6 +239,10 @@ fn get_display_info() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "width": 1920, "height": 1080, "refreshRate": 60 }))
 }
 
+// ---------------------------------------------------------------------------
+// App entry point
+// ---------------------------------------------------------------------------
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -171,13 +254,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    handle_hotkey(app);
-                }
-            })
-            .build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        handle_hotkey(app);
+                    }
+                })
+                .build(),
+        )
         .manage(recorder_state)
         .setup(|app| {
             let app_handle = app.handle();
@@ -195,31 +280,29 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon().cloned() {
                 tray = tray.icon(icon);
             }
-            tray.on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                        "settings" => show_settings(app),
-                        "quit" => {
-                            let state = app.state::<Arc<RecorderState>>();
-                            if state.is_recording.load(Ordering::SeqCst) {
-                                let _ = stop_recording(&state);
-                                close_overlay(app);
-                            }
-                            app.exit(0);
-                        }
-                        _ => {}
+            tray.on_menu_event(move |app, event| match event.id().as_ref() {
+                "settings" => show_settings(app),
+                "quit" => {
+                    let state = app.state::<Arc<RecorderState>>();
+                    if state.is_recording.load(Ordering::SeqCst) {
+                        let _ = stop_recording(&state);
+                        close_overlay(app);
                     }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_settings(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                    app.exit(0);
+                }
+                _ => {}
+            })
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_settings(tray.app_handle());
+                }
+            })
+            .build(app)?;
 
             let config = Config::load();
             tracing::info!("Hotkey from config: {}", config.hotkey);
@@ -233,15 +316,21 @@ pub fn run() {
 
             // Register initial hotkey
             let hk = config.hotkey.clone();
-            app_handle.global_shortcut().register(hk.as_str())
+            app_handle
+                .global_shortcut()
+                .register(hk.as_str())
                 .map_err(|e| format!("Failed to register hotkey '{}': {}", hk, e))?;
             let state = app_handle.state::<Arc<RecorderState>>();
             *state.hotkey_str.lock().unwrap_or_else(|e| e.into_inner()) = hk.clone();
             tracing::info!("Hotkey registered: {}", hk);
 
+            start_audio_previews(&state, &config, app_handle);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            enum_sources,
+            get_thumbnail,
             start_rec,
             stop_rec,
             get_status,
@@ -253,6 +342,7 @@ pub fn run() {
             reload_hotkey,
             hide_settings,
             get_display_info,
+            get_microphones,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

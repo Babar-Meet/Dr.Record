@@ -8,11 +8,18 @@ use tracing;
 pub struct Config {
     pub output_dir: String,
     pub hotkey: String,
-    pub recording_mode: String,
+    /// New field: "all" | "monitor:N" | "window:HWND"
+    /// Old field "recording_mode" is migrated on load.
+    pub recording_source: String,
+    /// Kept for backward-compat deserialization; ignored on save.
+    #[serde(default, skip_serializing)]
+    pub recording_mode: Option<String>,
     pub framerate: u32,
     pub quality: String,
     pub show_overlay: bool,
     pub auto_start: bool,
+    pub record_system_audio: bool,
+    pub microphone_name: String,
 }
 
 impl Default for Config {
@@ -22,8 +29,9 @@ impl Default for Config {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .to_string_lossy()
                 .to_string(),
-            hotkey: "Ctrl+Shift+R".to_string(),
-            recording_mode: "fullscreen".to_string(),
+            hotkey: "Ctrl+Shift+Alt+R".to_string(),
+            recording_source: "all".to_string(),
+            recording_mode: None,
             framerate: 60,
             quality: "high".to_string(),
             show_overlay: true,
@@ -44,6 +52,8 @@ impl Default for Config {
                     false
                 }
             },
+            record_system_audio: true,
+            microphone_name: "None".to_string(),
         }
     }
 }
@@ -68,24 +78,40 @@ impl Config {
             return config;
         }
 
-        match fs::read_to_string(&path) {
+        let mut config: Config = match fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str(&content) {
-                Ok(config) => {
+                Ok(c) => {
                     tracing::info!("Config loaded successfully");
-                    config
+                    c
                 }
                 Err(e) => {
                     tracing::error!("Failed to parse config: {}. Using defaults.", e);
-                    let config = Config::default();
-                    config.save();
-                    config
+                    let c = Config::default();
+                    c.save();
+                    return c;
                 }
             },
             Err(e) => {
                 tracing::error!("Failed to read config: {}. Using defaults.", e);
-                Config::default()
+                return Config::default();
+            }
+        };
+
+        // Backward-compat: migrate old recording_mode -> recording_source
+        if config.recording_source.is_empty() || config.recording_source == "fullscreen" {
+            if let Some(old_mode) = config.recording_mode.take() {
+                config.recording_source = match old_mode.as_str() {
+                    "multimonitor" => "all".to_string(),
+                    "window" => "all".to_string(), // can't restore HWND; reset to all
+                    _ => "all".to_string(),
+                };
+            } else {
+                config.recording_source = "all".to_string();
             }
         }
+        config.recording_mode = None;
+
+        config
     }
 
     pub fn save(&self) {
