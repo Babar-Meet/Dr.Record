@@ -4,6 +4,10 @@
 
 # Dr. Record
 
+<p align="center">
+  <video src="video/out/dr-record-ux.mp4" controls width="720" poster="video/out/dr-record-poster.png"></video>
+</p>
+
 A minimal, lightweight Windows screen recorder that lives in the system tray. Press a global hotkey to start or stop recording. No GUI clutter, no bloat — just record.
 
 Built with [Tauri 2](https://v2.tauri.app) and [FFmpeg](https://ffmpeg.org/).
