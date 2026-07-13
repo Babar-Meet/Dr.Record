@@ -5,7 +5,9 @@
 # Dr. Record
 
 <p align="center">
-  <video src="video/out/dr-record-ux.mp4" controls width="720" poster="video/out/dr-record-poster.png"></video>
+  <a href="https://github.com/Babar-Meet/Dr.Record/blob/main/video/out/dr-record-ux.mp4">
+    <img src="https://github.com/Babar-Meet/Dr.Record/raw/main/video/out/dr-record-poster.png" alt="Dr. Record - User Experience Video" width="720">
+  </a>
 </p>
 
 A minimal, lightweight Windows screen recorder that lives in the system tray. Press a global hotkey to start or stop recording. No GUI clutter, no bloat — just record.
