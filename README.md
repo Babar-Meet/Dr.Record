@@ -116,7 +116,7 @@ Dr.Record/
 | `src-tauri/src/lib.rs` | Application entry point. Sets up the system tray icon & menu, registers the global hotkey, handles all Tauri IPC commands, and manages app lifecycle. |
 | `src-tauri/src/config.rs` | Defines the `Config` struct. Handles loading/saving JSON from `%APPDATA%\dr-record\config.json` with fallback to defaults on corruption or missing fields. |
 | `src-tauri/src/recorder.rs` | Manages the FFmpeg subprocess lifecycle. `start_recording` spawns FFmpeg with gdigrab arguments. `stop_recording` sends `q` to FFmpeg's stdin and waits for exit. Generates timestamped filenames. |
-| `src-tauri/src/overlay.rs` | Creates the always-on-top transparent overlay window (180×44 px, positioned at top-right) and the 520×480 centered settings window. Reuses existing windows when possible. The settings window close button is intercepted to hide rather than destroy the window. |
+| `src-tauri/src/overlay.rs` | Creates the always-on-top transparent overlay window (180×44 px, positioned at bottom-right) and the 520×600 centered settings window. Reuses existing windows when possible. The settings window close button is intercepted to hide rather than destroy the window. Positioning accounts for DPI scaling and multi-monitor setups. |
 | `src/main.js` | Settings UI logic: loads/saves config via Tauri IPC, captures keyboard shortcuts, shows status (idle/recording), triggers test recordings, displays monitor info. |
 | `src/overlay.js` | Polls `get_elapsed_secs` every second and displays elapsed time in `MM:SS` format. Closes the overlay window when `recording-stopped` event fires. |
 | `tests/TEST_PLAN.md` | 1084 black-box test cases across 12 categories (installation, first launch, settings, hotkeys, recording engine, overlay, tray, file output, multi-monitor, edge cases, configuration, performance). |
@@ -135,7 +135,7 @@ Dr.Record/
 │  ┌─────────────┐    ┌──────────────────────────┐     │
 │  │  Settings     │    │  Overlay (transparent)   │     │
 │  │  Window       │    │  [● REC 00:42]          │     │
-│  │  (520×480)   │    │  always-on-top, pill     │     │
+│  │  (520×600)   │    │  bottom-right, pill     │     │
 │  └──────┬───────┘    └──────────────────────────┘     │
 │         │                                                │
 │         │  Tauri IPC (invoke / events)                   │
@@ -230,9 +230,10 @@ Configuration is stored as JSON at `%APPDATA%\dr-record\config.json`. It is load
 ### 3. Overlay (`src-tauri/src/overlay.rs`)
 
 - **Responsibility**: Create and manage two Tauri windows — the recording overlay and the settings window.
-- **Overlay window**: 180×44 px, transparent, no decorations, always-on-top, skips taskbar/Alt+Tab, not focusable, no shadow, cursor hidden. Positioned at top-right of the settings window's monitor (or primary monitor) with a 20px right/top margin.
-- **Settings window**: 520×480 px, non-resizable, centered on screen, titled "Dr. Record Settings". Close button is intercepted to hide rather than destroy the window (the app stays alive in the tray).
+- **Overlay window**: 180×44 px, transparent, no decorations, always-on-top, skips taskbar/Alt+Tab, not focusable, no shadow, cursor hidden. Positioned at bottom-right of the settings window's monitor (or primary monitor) flush to the corner.
+- **Settings window**: 520×600 px, non-resizable, centered on screen, titled "Dr. Record Settings". Close button is intercepted to hide rather than destroy the window (the app stays alive in the tray).
 - **Window reuse**: Both window types check if an instance is already open before creating a new one.
+- **Positioning**: Both windows use `set_position()` after build (not builder `.position()`) for reliability. Coordinates are computed in logical pixels using the monitor's scale factor and origin offset, making positioning work correctly across DPI scaling and multi-monitor setups.
 
 ### 4. Application Entry (`src-tauri/src/lib.rs`)
 
@@ -497,7 +498,7 @@ After building, run the binary directly:
 
 1. **Launch**: The app starts, reads `config.json` from `%APPDATA%\dr-record\`, creates the system tray icon, registers the global hotkey, and always opens the settings window. This window appears on every launch — closing it hides the app to the system tray rather than quitting.
 2. **Configuration**: The user can set the output directory, hotkey, recording mode, framerate, quality, overlay visibility, and auto-start preference. Clicking "Save & Start" persists the config, re-registers the hotkey, and auto-hides the settings window.
-3. **Recording toggle**: From any application, pressing the hotkey (default `Ctrl+Shift+R`) starts FFmpeg screen capture. A transparent overlay appears at the top-right of the screen showing a red pulsing dot, "REC" label, and an elapsed timer (MM:SS). The overlay polls the elapsed time every second. Pressing the hotkey again sends `q\n` to FFmpeg's stdin for graceful shutdown, waits for the process to exit, saves the `.mp4` file, and hides the overlay.
+3. **Recording toggle**: From any application, pressing the hotkey (default `Ctrl+Shift+R`) starts FFmpeg screen capture. A transparent overlay appears at the bottom-right of the screen showing a red pulsing dot, "REC" label, and an elapsed timer (MM:SS). The overlay polls the elapsed time every second. Pressing the hotkey again sends `q\n` to FFmpeg's stdin for graceful shutdown, waits for the process to exit, saves the `.mp4` file, and hides the overlay.
 4. **File output**: Recordings are saved to the configured directory with filenames like `DrRecord_Screen_2026-07-07_14-30-00.mp4`. The mode label in the filename varies: `Screen` (fullscreen), `Multi` (all monitors), or `Window` (active window).
 5. **Accessing settings**: Left-click the tray icon to show settings at any time. Right-click for "Settings" and "Quit" options.
 6. **Auto-start**: If enabled, the app registers itself in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` for automatic startup on user login.

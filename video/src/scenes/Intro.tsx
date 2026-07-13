@@ -1,9 +1,5 @@
-import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig, Img, staticFile } from 'remotion';
 import { colors, fonts } from '../theme';
-
-const pulse = (frame: number) => {
-  return 1 - Math.abs(Math.sin(frame * 0.04)) * 0.3;
-};
 
 export const Intro: React.FC = () => {
   const frame = useCurrentFrame();
@@ -20,8 +16,6 @@ export const Intro: React.FC = () => {
     fps,
     config: { damping: 12, mass: 0.5 },
   });
-
-  const dotOpacity = pulse(frame);
 
   return (
     <AbsoluteFill
@@ -41,25 +35,15 @@ export const Intro: React.FC = () => {
           opacity: titleSpring,
         }}
       >
-        {/* App logo placeholder */}
-        <div
+        <Img
+          src={staticFile('/icon.png')}
           style={{
             width: 80,
             height: 80,
-            borderRadius: 18,
-            background: `linear-gradient(135deg, ${colors.accent}, ${colors.accentHover})`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 32,
-            fontWeight: 700,
-            color: '#000',
-            fontFamily: fonts.ui,
-            boxShadow: `0 0 40px ${colors.accent}44`,
+            borderRadius: 16,
+            boxShadow: `0 0 40px ${colors.accent}33`,
           }}
-        >
-          DR
-        </div>
+        />
 
         <h1
           style={{
@@ -93,7 +77,6 @@ export const Intro: React.FC = () => {
               height: 8,
               borderRadius: '50%',
               background: colors.green,
-              opacity: dotOpacity,
             }}
           />
           <span
@@ -104,12 +87,11 @@ export const Intro: React.FC = () => {
               fontWeight: 400,
             }}
           >
-            Dr. Record — Zero BS Screen Recorder
+            Dr. Record — Minimal Screen Recorder
           </span>
         </div>
       </div>
 
-      {/* Decorative elements */}
       <div
         style={{
           position: 'absolute',
@@ -127,11 +109,7 @@ export const Intro: React.FC = () => {
               width: 40,
               height: 3,
               borderRadius: 2,
-              background:
-                frame > 60 + i * 10
-                  ? colors.accent
-                  : colors.border,
-              transition: 'background 0.3s',
+              background: frame > 60 + i * 10 ? colors.accent : colors.border,
             }}
           />
         ))}

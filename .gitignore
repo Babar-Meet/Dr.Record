@@ -33,3 +33,6 @@ tests/*.json
 
 # Bundled FFmpeg (downloaded by scripts/build-release.ps1)
 resources/ffmpeg/*.exe
+
+# Remotion video output (rendered from source)
+video/out/
