@@ -23,6 +23,7 @@ body.settings-body {
   background: var(--bg);
   color: var(--text);
   height: 100vh;
+  overflow-y: auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -34,8 +35,8 @@ body.settings-body {
   background: var(--surface);
   border-radius: 8px;
   padding: 24px 28px;
-  width: 480px;
-  max-width: 95vw;
+  width: min(480px, 92vw);
+  margin: auto;
   border: 1px solid var(--border);
 }
 

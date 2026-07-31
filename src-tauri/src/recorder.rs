@@ -13,9 +13,44 @@ use std::time::Instant;
 use tracing;
 use xcap::{Monitor, Window};
 use crate::audio::AudioRecorder;
+use tauri::Emitter;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Open a capture stream, retrying a few times. WASAPI releases a device
+/// asynchronously, so immediately reopening a device that was just stopped
+/// (e.g. a mic preview stream) can fail transiently; a short backoff resolves
+/// it without silently dropping the track.
+fn start_audio_recorder_with_retry(
+    app: &tauri::AppHandle,
+    is_system: bool,
+    device_name: Option<String>,
+    output_path: Option<String>,
+    source_name: String,
+) -> Result<AudioRecorder, String> {
+    let attempts = 4;
+    let mut last_err = String::new();
+    for i in 0..attempts {
+        let mut recorder = AudioRecorder::new();
+        match recorder.start(
+            app.clone(),
+            is_system,
+            device_name.clone(),
+            output_path.clone(),
+            source_name.clone(),
+        ) {
+            Ok(()) => return Ok(recorder),
+            Err(e) => {
+                last_err = e;
+                if i + 1 < attempts {
+                    std::thread::sleep(std::time::Duration::from_millis(200 * (i + 1)));
+                }
+            }
+        }
+    }
+    Err(last_err)
 }
 
 pub struct RecorderState {
@@ -443,24 +478,26 @@ pub fn start_recording(
 
     // Audio Setup
     if config.record_system_audio {
-        let mut sys_recorder = AudioRecorder::new();
         let sys_path = output_path.replace(".mp4", "_sys.wav");
         *lock(&state.sys_audio_path) = Some(sys_path.clone());
-        if let Err(e) = sys_recorder.start(app_handle.clone(), true, None, Some(sys_path.clone()), "system".to_string()) {
-            tracing::error!("Failed to start system audio: {}", e);
-        } else {
-            *lock(&state.sys_audio) = Some(sys_recorder);
+        match start_audio_recorder_with_retry(app_handle, true, None, Some(sys_path.clone()), "system".to_string()) {
+            Ok(rec) => *lock(&state.sys_audio) = Some(rec),
+            Err(e) => {
+                tracing::error!("Failed to start system audio: {}", e);
+                let _ = app_handle.emit("audio-error", format!("System audio failed: {}", e));
+            }
         }
     }
     
     if config.microphone_name != "None" {
-        let mut mic_recorder = AudioRecorder::new();
         let mic_path = output_path.replace(".mp4", "_mic.wav");
         *lock(&state.mic_audio_path) = Some(mic_path.clone());
-        if let Err(e) = mic_recorder.start(app_handle.clone(), false, Some(config.microphone_name.clone()), Some(mic_path.clone()), "mic".to_string()) {
-            tracing::error!("Failed to start mic audio: {}", e);
-        } else {
-            *lock(&state.mic_audio) = Some(mic_recorder);
+        match start_audio_recorder_with_retry(app_handle, false, Some(config.microphone_name.clone()), Some(mic_path.clone()), "mic".to_string()) {
+            Ok(rec) => *lock(&state.mic_audio) = Some(rec),
+            Err(e) => {
+                tracing::error!("Failed to start mic audio: {}", e);
+                let _ = app_handle.emit("audio-error", format!("Microphone failed: {}", e));
+            }
         }
     }
 
@@ -506,8 +543,6 @@ pub fn start_recording(
                 state_clone_watchdog.is_recording.store(false, Ordering::SeqCst);
                 *lock(&state_clone_watchdog.start_time) = None;
                 *lock(&state_clone_watchdog.process) = None;
-
-                use tauri::Emitter;
                 let _ = app_clone_watchdog.emit("recording-crashed", error_msg);
                 let _ = app_clone_watchdog.emit("status-changed", "stopped");
                 break;
@@ -599,23 +634,59 @@ pub fn stop_recording(state: &RecorderState) -> Result<Option<String>, String> {
 
         if audio_inputs > 0 {
             if audio_inputs == 1 {
-                // One audio source, just map it
-                mux_args.extend_from_slice(&[
-                    "-c:v".to_string(), "copy".to_string(),
-                    "-c:a".to_string(), "aac".to_string(),
-                    "-map".to_string(), "0:v:0".to_string(),
-                    "-map".to_string(), "1:a:0".to_string(),
-                    final_path.clone()
-                ]);
+                // One audio source. If it is the microphone, lift it a bit since
+                // speech on a headset mic is usually far below full-scale audio.
+                let mic_only = mic_path
+                    .as_ref()
+                    .map(|p| std::path::Path::new(p).exists())
+                    .unwrap_or(false)
+                    && !sys_path
+                        .as_ref()
+                        .map(|p| std::path::Path::new(p).exists())
+                        .unwrap_or(false);
+                let mut one_audio = vec![
+                    "-c:v".to_string(),
+                    "copy".to_string(),
+                    "-c:a".to_string(),
+                    "aac".to_string(),
+                    "-map".to_string(),
+                    "0:v:0".to_string(),
+                    "-map".to_string(),
+                    "1:a:0".to_string(),
+                ];
+                if mic_only {
+                    one_audio = vec![
+                        "-c:v".to_string(),
+                        "copy".to_string(),
+                        "-af".to_string(),
+                        "volume=2.0".to_string(),
+                        "-c:a".to_string(),
+                        "aac".to_string(),
+                        "-map".to_string(),
+                        "0:v:0".to_string(),
+                        "-map".to_string(),
+                        "1:a:0".to_string(),
+                    ];
+                }
+                mux_args.extend(one_audio);
+                mux_args.push(final_path.clone());
             } else {
-                // Mix two audio sources
+                // System audio + microphone mixed. Disable amix's default
+                // normalization (which halves every input) and boost the mic
+                // so speech is audible next to loud system audio. Inputs:
+                // 0=video, 1=system, 2=microphone.
                 mux_args.extend_from_slice(&[
-                    "-filter_complex".to_string(), "[1:a][2:a]amix=inputs=2[a]".to_string(),
-                    "-map".to_string(), "0:v".to_string(),
-                    "-map".to_string(), "[a]".to_string(),
-                    "-c:v".to_string(), "copy".to_string(),
-                    "-c:a".to_string(), "aac".to_string(),
-                    final_path.clone()
+                    "-filter_complex".to_string(),
+                    "[1:a]volume=1.0[a1];[2:a]volume=2.0[a2];[a1][a2]amix=inputs=2:normalize=0[a]".to_string(),
+                    "-map".to_string(),
+                    "0:v".to_string(),
+                    "-map".to_string(),
+                    "[a]".to_string(),
+                    "-c:v".to_string(),
+                    "copy".to_string(),
+                    "-c:a".to_string(),
+                    "aac".to_string(),
+                    final_path.clone(),
                 ]);
             }
         } else {
@@ -665,20 +736,16 @@ pub fn start_audio_previews(
     stop_audio_previews(state);
 
     if config.record_system_audio {
-        let mut sys_recorder = AudioRecorder::new();
-        if let Err(e) = sys_recorder.start(app_handle.clone(), true, None, None, "system".to_string()) {
-            tracing::warn!("Failed to start system audio preview: {}", e);
-        } else {
-            *lock(&state.preview_sys_audio) = Some(sys_recorder);
+        match start_audio_recorder_with_retry(app_handle, true, None, None, "system".to_string()) {
+            Ok(rec) => *lock(&state.preview_sys_audio) = Some(rec),
+            Err(e) => tracing::warn!("Failed to start system audio preview: {}", e),
         }
     }
 
     if config.microphone_name != "None" {
-        let mut mic_recorder = AudioRecorder::new();
-        if let Err(e) = mic_recorder.start(app_handle.clone(), false, Some(config.microphone_name.clone()), None, "mic".to_string()) {
-            tracing::warn!("Failed to start mic audio preview: {}", e);
-        } else {
-            *lock(&state.preview_mic_audio) = Some(mic_recorder);
+        match start_audio_recorder_with_retry(app_handle, false, Some(config.microphone_name.clone()), None, "mic".to_string()) {
+            Ok(rec) => *lock(&state.preview_mic_audio) = Some(rec),
+            Err(e) => tracing::warn!("Failed to start mic audio preview: {}", e),
         }
     }
 }

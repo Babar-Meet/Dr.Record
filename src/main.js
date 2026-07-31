@@ -415,6 +415,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const unlistenError = await listen("recording-error", (e) => {
     showNotification("Recording error: " + e.payload, "error");
   });
+  const unlistenAudioError = await listen("audio-error", (e) => {
+    showNotification("Audio warning: " + e.payload, "error");
+  });
   const unlistenWindowClosed = await listen("recording-stopped-window-closed", () => {
     updateStatus();
     showNotification("Target window closed — recording saved.", "info");
@@ -439,6 +442,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearInterval(interval);
     unlistenStatus();
     unlistenError();
+    unlistenAudioError();
     unlistenWindowClosed();
     unlistenSysAudio();
     unlistenMicAudio();

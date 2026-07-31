@@ -56,14 +56,15 @@ pub fn create_settings_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let win_w = 520.0;
-    let win_h = 600.0;
+    let win_w = 560.0;
+    let win_h = 720.0;
     let padding = 20.0;
 
     let window = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title("Dr. Record Settings")
         .inner_size(win_w, win_h)
-        .resizable(false)
+        .min_inner_size(480.0, 560.0)
+        .resizable(true)
         .build()
         .map_err(|e| format!("Failed to create settings: {}", e))?;
 
