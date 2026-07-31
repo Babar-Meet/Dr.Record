@@ -445,22 +445,22 @@ pub fn start_recording(
     if config.record_system_audio {
         let mut sys_recorder = AudioRecorder::new();
         let sys_path = output_path.replace(".mp4", "_sys.wav");
+        *lock(&state.sys_audio_path) = Some(sys_path.clone());
         if let Err(e) = sys_recorder.start(app_handle.clone(), true, None, Some(sys_path.clone()), "system".to_string()) {
-            tracing::warn!("Failed to start system audio: {}", e);
+            tracing::error!("Failed to start system audio: {}", e);
         } else {
             *lock(&state.sys_audio) = Some(sys_recorder);
-            *lock(&state.sys_audio_path) = Some(sys_path);
         }
     }
     
     if config.microphone_name != "None" {
         let mut mic_recorder = AudioRecorder::new();
         let mic_path = output_path.replace(".mp4", "_mic.wav");
+        *lock(&state.mic_audio_path) = Some(mic_path.clone());
         if let Err(e) = mic_recorder.start(app_handle.clone(), false, Some(config.microphone_name.clone()), Some(mic_path.clone()), "mic".to_string()) {
-            tracing::warn!("Failed to start mic audio: {}", e);
+            tracing::error!("Failed to start mic audio: {}", e);
         } else {
             *lock(&state.mic_audio) = Some(mic_recorder);
-            *lock(&state.mic_audio_path) = Some(mic_path);
         }
     }
 
@@ -561,7 +561,6 @@ pub fn stop_recording(state: &RecorderState) -> Result<Option<String>, String> {
     }
 
     *lock(&state.start_time) = None;
-    *lock(&state.start_time) = None;
     *lock(&state.watch_hwnd) = 0;
 
     if let Some(mut sys) = lock(&state.sys_audio).take() {
@@ -585,12 +584,16 @@ pub fn stop_recording(state: &RecorderState) -> Result<Option<String>, String> {
             if std::path::Path::new(sp).exists() {
                 mux_args.extend_from_slice(&["-i".to_string(), sp.clone()]);
                 audio_inputs += 1;
+            } else {
+                tracing::error!("System audio was requested but no audio file was produced at {}", sp);
             }
         }
         if let Some(mp) = &mic_path {
             if std::path::Path::new(mp).exists() {
                 mux_args.extend_from_slice(&["-i".to_string(), mp.clone()]);
                 audio_inputs += 1;
+            } else {
+                tracing::error!("Microphone audio was requested but no audio file was produced at {}", mp);
             }
         }
 

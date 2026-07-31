@@ -6,7 +6,7 @@ mod audio;
 use config::Config;
 use overlay::{close_overlay, create_overlay_window, create_settings_window, show_settings};
 use recorder::{
-    enum_monitors, get_elapsed, start_recording, stop_recording, start_audio_previews, stop_audio_previews, MonitorInfo,
+    enum_monitors, get_elapsed, start_recording, stop_recording, start_audio_previews, MonitorInfo,
     RecorderState, WindowInfo,
 };
 use std::sync::atomic::Ordering;
