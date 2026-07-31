@@ -8,8 +8,8 @@ use tracing;
 pub struct Config {
     pub output_dir: String,
     pub hotkey: String,
-    /// New field: "all" | "monitor:N" | "window:HWND"
-    /// Old field "recording_mode" is migrated on load.
+    /// "all" | "monitor:<device_id>" (e.g. "monitor:\\.\DISPLAY1") | "window:HWND".
+    /// Legacy "monitor:<index>" values are still accepted and resolved at use time.
     pub recording_source: String,
     /// Kept for backward-compat deserialization; ignored on save.
     #[serde(default, skip_serializing)]

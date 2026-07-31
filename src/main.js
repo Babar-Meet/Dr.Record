@@ -41,6 +41,23 @@ async function loadPreview(value) {
   }
 }
 
+// Monitor selections are keyed by the monitor's stable device id
+// (e.g. "monitor:\\.\DISPLAY1") so the dropdown, the preview thumbnail, and
+// the recorded capture always refer to the same physical monitor.
+// Old configs stored "monitor:<index>"; normalize those to the matching
+// device id against the freshly enumerated list.
+function normalizeMonitorSource(target, monitors) {
+  if (typeof target === "string" && target.startsWith("monitor:")) {
+    const key = target.slice("monitor:".length);
+    if (/^\d+$/.test(key)) {
+      const mon = monitors[parseInt(key, 10)];
+      if (mon && mon.device_id) return `monitor:${mon.device_id}`;
+      return "all";
+    }
+  }
+  return target;
+}
+
 async function populateSources(savedSource) {
   const select = $("#sourceSelect");
   const hint = $("#sourceHint");
@@ -65,15 +82,19 @@ async function populateSources(savedSource) {
       monGroup.label = "Monitors";
       for (const mon of monitors) {
         const opt = document.createElement("option");
-        opt.value = `monitor:${mon.index}`;
+        const id = mon.device_id ?? mon.index;
+        opt.value = `monitor:${id}`;
         opt.textContent = `🖥  ${mon.label}  (${mon.width}×${mon.height})`;
         monGroup.appendChild(opt);
       }
       select.appendChild(monGroup);
     }
 
-    // Restore saved / previous / refreshed value
-    const target = savedSource ?? prevValue ?? "all";
+    // Restore saved / previous / refreshed value (migrating legacy indices)
+    const target = normalizeMonitorSource(
+      savedSource ?? prevValue ?? "all",
+      monitors ?? []
+    );
     if ([...select.options].some((o) => o.value === target)) {
       select.value = target;
     } else {

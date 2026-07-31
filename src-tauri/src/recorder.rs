@@ -88,9 +88,10 @@ pub fn quality_to_crf(quality: &str) -> u32 {
 /// Build FFmpeg args for gdigrab.
 ///
 /// Sources:
-///   "all"         – full virtual desktop
-///   "monitor:N"   – single monitor, offset + video_size
-///   "window:HWND" – `title=<title>` input
+///   "all"              – full virtual desktop
+///   "monitor:<device>" – single monitor (e.g. "monitor:\\.\DISPLAY1"; legacy
+///                        "monitor:N" indices also accepted), offset + video_size
+///   "window:HWND"      – `title=<title>` input
 fn build_ffmpeg_args(
     output_path: &str,
     source: &str,
@@ -108,8 +109,7 @@ fn build_ffmpeg_args(
     ];
 
     if source.starts_with("monitor:") {
-        let idx: usize = source["monitor:".len()..].parse().unwrap_or(0);
-        if let Some(mon) = monitors.get(idx) {
+        if let Some(mon) = resolve_monitor(source, monitors) {
             let mut w = mon.width;
             let mut h = mon.height;
             if w % 2 != 0 { w -= 1; }
@@ -182,6 +182,11 @@ fn ffmpeg_on_path() -> bool {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MonitorInfo {
     pub index: usize,
+    /// Stable per-monitor identity. On Windows this is the device string
+    /// (szDevice from MONITORINFOEXW), e.g. `\\.\DISPLAY1`. All consumers
+    /// (dropdown, preview, capture) resolve the same physical monitor from
+    /// this id so they can never disagree.
+    pub device_id: String,
     pub label: String,
     pub x: i32,
     pub y: i32,
@@ -194,6 +199,32 @@ pub struct MonitorInfo {
 pub struct WindowInfo {
     pub hwnd: usize,
     pub title: String,
+}
+
+/// Convert a Windows wide-char buffer to a Rust String, truncating at the
+/// first null terminator.
+#[cfg(target_os = "windows")]
+fn device_string(dev: &[u16]) -> String {
+    let len = dev.iter().position(|&c| c == 0).unwrap_or(dev.len());
+    String::from_utf16_lossy(&dev[..len])
+}
+
+/// Resolve a `monitor:...` source string to the physical `MonitorInfo` it
+/// refers to, using `monitors` (the primary-first enumeration) as the map.
+///
+/// New-style values carry the stable device id (`monitor:\\.\DISPLAY1`) and are
+/// matched by identity. Legacy values carry a positional index
+/// (`monitor:0`) and are treated as an index into the same enumeration, which
+/// is the order the dropdown always displayed them in.
+fn resolve_monitor<'a>(source: &str, monitors: &'a [MonitorInfo]) -> Option<&'a MonitorInfo> {
+    let key = source.strip_prefix("monitor:")?;
+    if let Some(m) = monitors.iter().find(|m| m.device_id == key) {
+        return Some(m);
+    }
+    if let Ok(idx) = key.parse::<usize>() {
+        return monitors.get(idx);
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +262,7 @@ pub fn enum_monitors() -> Vec<MonitorInfo> {
         if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _) != 0 {
             let rc = mi.monitorInfo.rcMonitor;
             let is_primary = (mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+            let device_id = device_string(&mi.szDevice);
             let label = if is_primary {
                 format!("Monitor {} (Primary)", idx + 1)
             } else {
@@ -238,6 +270,7 @@ pub fn enum_monitors() -> Vec<MonitorInfo> {
             };
             col.monitors.push(MonitorInfo {
                 index: idx,
+                device_id,
                 label,
                 x: rc.left,
                 y: rc.top,
@@ -262,10 +295,10 @@ pub fn enum_monitors() -> Vec<MonitorInfo> {
     col.monitors.sort_by(|a, b| b.is_primary.cmp(&a.is_primary));
     for (i, m) in col.monitors.iter_mut().enumerate() {
         m.index = i;
-        if m.is_primary && !m.label.contains("Primary") {
-            m.label = format!("Monitor {} (Primary)", i + 1);
-        } else if !m.is_primary {
-            m.label = format!("Monitor {}", i + 1);
+        if m.is_primary {
+            m.label = format!("Monitor {} (Primary) [{}]", i + 1, m.device_id);
+        } else {
+            m.label = format!("Monitor {} [{}]", i + 1, m.device_id);
         }
     }
     col.monitors
@@ -275,6 +308,7 @@ pub fn enum_monitors() -> Vec<MonitorInfo> {
 pub fn enum_monitors() -> Vec<MonitorInfo> {
     vec![MonitorInfo {
         index: 0,
+        device_id: "default".to_string(),
         label: "Monitor 1 (Primary)".to_string(),
         x: 0,
         y: 0,
@@ -286,20 +320,45 @@ pub fn enum_monitors() -> Vec<MonitorInfo> {
 
 
 
+fn capture_monitor_png(monitor: &Monitor) -> Option<String> {
+    let image = monitor.capture_image().ok()?;
+    let mut buf = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buf);
+    image.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
+    use base64::Engine;
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&buf)
+    ))
+}
+
 pub fn get_thumbnail(source: &str) -> Option<String> {
-    if source.starts_with("monitor:") {
-        let idx: usize = source["monitor:".len()..].parse().unwrap_or(0);
+    if let Some(key) = source.strip_prefix("monitor:") {
         let monitors = Monitor::all().ok()?;
-        if let Some(m) = monitors.get(idx) {
-            let image = m.capture_image().ok()?;
-            let mut buf = Vec::new();
-            let mut cursor = std::io::Cursor::new(&mut buf);
-            image.write_to(&mut cursor, image::ImageFormat::Png).ok()?;
-            use base64::Engine;
-            return Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&buf)));
+        // Canonical identity: resolve the source to a device id via the same
+        // primary-first enumeration the capture path uses, then find the xcap
+        // monitor whose device name matches it. Legacy "monitor:<index>"
+        // values resolve to a device id here too, so the preview always shows
+        // the physical monitor that would be recorded.
+        let known = enum_monitors();
+        if let Some(info) = resolve_monitor(source, &known) {
+            if let Some(m) = monitors
+                .iter()
+                .find(|m| m.name().ok().as_deref() == Some(info.device_id.as_str()))
+            {
+                return capture_monitor_png(m);
+            }
         }
-    } else if source.starts_with("window:") {
-        let hwnd: usize = source["window:".len()..].parse().unwrap_or(0);
+        // Defensive fallback for platforms/edge cases where device names can't
+        // be matched (e.g. non-Windows stubs): keep the old positional-index
+        // behavior so a preview is still produced.
+        if let Ok(idx) = key.parse::<usize>() {
+            if let Some(m) = monitors.get(idx) {
+                return capture_monitor_png(m);
+            }
+        }
+    } else if let Some(key) = source.strip_prefix("window:") {
+        let hwnd: usize = key.parse().unwrap_or(0);
         let windows = Window::all().ok()?;
         if let Some(w) = windows.iter().find(|w| w.id().unwrap_or(0) as usize == hwnd) {
             let image = w.capture_image().ok()?;
@@ -627,5 +686,147 @@ pub fn stop_audio_previews(state: &RecorderState) {
     }
     if let Some(mut mic) = lock(&state.preview_mic_audio).take() {
         mic.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_monitors() -> Vec<MonitorInfo> {
+        vec![
+            MonitorInfo {
+                index: 0,
+                device_id: "\\\\.\\DISPLAY1".to_string(),
+                label: "Monitor 1 (Primary) [\\\\.\\DISPLAY1]".to_string(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: true,
+            },
+            MonitorInfo {
+                index: 1,
+                device_id: "\\\\.\\DISPLAY2".to_string(),
+                label: "Monitor 2 [\\\\.\\DISPLAY2]".to_string(),
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                is_primary: false,
+            },
+            MonitorInfo {
+                index: 2,
+                device_id: "\\\\.\\DISPLAY3".to_string(),
+                label: "Monitor 3 [\\\\.\\DISPLAY3]".to_string(),
+                x: 0,
+                y: -1080,
+                width: 2560,
+                height: 1440,
+                is_primary: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn resolves_monitor_by_stable_device_id() {
+        let ms = fake_monitors();
+        let m = resolve_monitor("monitor:\\\\.\\DISPLAY2", &ms).expect("found");
+        assert_eq!(m.device_id, "\\\\.\\DISPLAY2");
+        assert_eq!(m.x, -1920);
+        assert_eq!(m.width, 1920);
+    }
+
+    #[test]
+    fn resolves_legacy_positional_index_to_same_monitor() {
+        let ms = fake_monitors();
+        // index 0 -> primary, index 1 -> secondary (left of primary, negative x)
+        let m0 = resolve_monitor("monitor:0", &ms).expect("found");
+        assert_eq!(m0.device_id, "\\\\.\\DISPLAY1");
+        assert!(m0.is_primary);
+        let m1 = resolve_monitor("monitor:1", &ms).expect("found");
+        assert_eq!(m1.device_id, "\\\\.\\DISPLAY2");
+        assert_eq!(m1.x, -1920);
+    }
+
+    #[test]
+    fn index_and_device_id_disagree_is_resolved_by_device_id() {
+        let ms = fake_monitors();
+        // Same physical monitor whichever style is stored.
+        assert_eq!(
+            resolve_monitor("monitor:2", &ms).unwrap().device_id,
+            "\\\\.\\DISPLAY3"
+        );
+        assert_eq!(
+            resolve_monitor("monitor:\\\\.\\DISPLAY3", &ms).unwrap().device_id,
+            "\\\\.\\DISPLAY3"
+        );
+    }
+
+    #[test]
+    fn unknown_or_non_monitor_sources_resolve_to_none() {
+        let ms = fake_monitors();
+        assert!(resolve_monitor("monitor:\\\\.\\DISPLAY99", &ms).is_none());
+        assert!(resolve_monitor("monitor:42", &ms).is_none());
+        assert!(resolve_monitor("all", &ms).is_none());
+        assert!(resolve_monitor("window:123", &ms).is_none());
+        assert!(resolve_monitor("", &ms).is_none());
+    }
+
+    #[test]
+    fn build_ffmpeg_args_uses_device_id_and_negative_offsets() {
+        let ms = fake_monitors();
+        let args = build_ffmpeg_args("out.mp4", "monitor:\\\\.\\DISPLAY2", 30, "high", &ms);
+        assert!(args.contains(&"-offset_x".to_string()));
+        let ox = args[args.iter().position(|a| a == "-offset_x").unwrap() + 1].clone();
+        let oy = args[args.iter().position(|a| a == "-offset_y").unwrap() + 1].clone();
+        let vs = args[args.iter().position(|a| a == "-video_size").unwrap() + 1].clone();
+        assert_eq!(ox, "-1920");
+        assert_eq!(oy, "0");
+        assert_eq!(vs, "1920x1080");
+    }
+
+    #[test]
+    fn build_ffmpeg_args_legacy_index_matches_device_id() {
+        let ms = fake_monitors();
+        let by_index = build_ffmpeg_args("out.mp4", "monitor:1", 30, "high", &ms);
+        let by_device = build_ffmpeg_args("out.mp4", "monitor:\\\\.\\DISPLAY2", 30, "high", &ms);
+        assert_eq!(by_index, by_device);
+    }
+
+    /// On real hardware, every device id exposed by enum_monitors() must map to
+    /// exactly one xcap monitor via the same name lookup get_thumbnail() uses.
+    /// This guarantees the preview always targets the monitor that capture
+    /// would record, regardless of how either enumeration orders monitors.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn every_enumerated_monitor_maps_to_one_xcap_monitor_by_device_id() {
+        let known = enum_monitors();
+        if known.is_empty() {
+            return;
+        }
+        let xcap_monitors = match Monitor::all() {
+            Ok(ms) => ms,
+            Err(_) => return, // capture API unavailable in this session
+        };
+        let device_ids: std::collections::HashSet<&str> =
+            known.iter().map(|m| m.device_id.as_str()).collect();
+        assert_eq!(
+            device_ids.len(),
+            known.len(),
+            "device ids must be unique"
+        );
+        for info in &known {
+            let matches: Vec<_> = xcap_monitors
+                .iter()
+                .filter(|m| m.name().ok().as_deref() == Some(info.device_id.as_str()))
+                .collect();
+            assert_eq!(
+                matches.len(),
+                1,
+                "device id {} must map to exactly one xcap monitor",
+                info.device_id
+            );
+        }
     }
 }
