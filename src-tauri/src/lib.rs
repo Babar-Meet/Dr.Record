@@ -701,7 +701,10 @@ fn annotation_hide(
     state: tauri::State<Arc<RecorderState>>,
 ) -> Result<bool, String> {
     let owned: Arc<RecorderState> = Arc::clone(&*state);
-    set_annotation_armed(&app, &owned, false, "esc")
+    let was = owned.annotation_armed.load(Ordering::SeqCst);
+    let out = set_annotation_armed(&app, &owned, false, "esc");
+    tracing::info!("annotation_hide via UI: was_armed={} ok={}", was, out.is_ok());
+    out
 }
 
 #[tauri::command]

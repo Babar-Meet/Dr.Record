@@ -258,7 +258,9 @@ h1 {
   align-items: center;
   gap: 8px;
   padding: 6px 14px;
-  background: rgba(0,0,0,0.8);
+  /* No backdrop-filter: it renders transparent WebView2 layers invisible.
+     Solid near-opaque background instead. */
+  background: rgba(10,10,10,0.94);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 20px;
   color: #fff;
@@ -267,7 +269,6 @@ h1 {
   font-weight: 600;
   cursor: move;
   -webkit-app-region: drag;
-  backdrop-filter: blur(12px);
   width: fit-content;
 }
 

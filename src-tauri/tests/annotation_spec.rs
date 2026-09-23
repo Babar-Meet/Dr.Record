@@ -32,19 +32,22 @@ use dr_record_lib::annotation::{
 // ─── F2.1 Tools, colors, thickness ───────────────────────────────────────────
 
 #[test]
-fn all_six_tools_exist_and_are_usable() {
+fn player_toolset_exists_and_is_usable() {
+    // Dr.Player drawbar set (marker/eraser dropped with the Player UI).
     let tools = available_tools();
     for required in [
         Tool::Pen,
-        Tool::Highlighter,
+        Tool::Line,
         Tool::Arrow,
+        Tool::Rect,
+        Tool::Circle,
+        Tool::Hand,
         Tool::Text,
-        Tool::Eraser,
         Tool::ClearAll,
     ] {
         assert!(tools.contains(&required), "tool {required:?} must exist");
     }
-    assert_eq!(tools.len(), 6);
+    assert_eq!(tools.len(), 8);
 }
 
 #[test]

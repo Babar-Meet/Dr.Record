@@ -6,24 +6,30 @@
 
 use std::collections::VecDeque;
 
-/// Usable annotation tools (clear-all included as a tool action).
+/// Usable annotation tools: the Dr.Player drawbar set (clear-all included
+/// as a tool action). Frontend tool strings; the backend stores them
+/// opaquely and never validates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Pen,
-    Highlighter,
+    Line,
     Arrow,
+    Rect,
+    Circle,
+    Hand,
     Text,
-    Eraser,
     ClearAll,
 }
 
 pub fn available_tools() -> Vec<Tool> {
     vec![
         Tool::Pen,
-        Tool::Highlighter,
+        Tool::Line,
         Tool::Arrow,
+        Tool::Rect,
+        Tool::Circle,
+        Tool::Hand,
         Tool::Text,
-        Tool::Eraser,
         Tool::ClearAll,
     ]
 }

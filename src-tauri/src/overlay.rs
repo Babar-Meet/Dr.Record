@@ -72,9 +72,10 @@ pub fn close_overlay(app: &AppHandle) {
 /// Known limitation (documented, not repositioned): a single fullscreen
 /// layer cannot be moved per monitor without risking burn-in misalignment
 /// with the gdigrab offset/video_size rect, so strokes outside the recorded
-/// monitor are clipped, never remapped. Toolbar burn-in is mitigated by the
-/// auto-hiding toolbar (`pokeToolbar` in `annotation.js`); marks already
-/// captured persist in the video track regardless.
+/// monitor are clipped, never remapped. The toolbar (Player drawbar look)
+/// stays visible for the whole armed session by user demand and hides with
+/// the window on disarm; marks already captured persist in the video track
+/// regardless.
 pub fn create_annotation_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window("annotation").is_some() {
         return Ok(());
