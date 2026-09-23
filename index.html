@@ -31,6 +31,15 @@
     </div>
 
     <div class="setting-group">
+      <label class="setting-label">Annotation Hotkey</label>
+      <div class="picker-row">
+        <input type="text" id="annotationHotkeyInput" class="picker-input hotkey-input" readonly placeholder="Press a key combination..." />
+        <button id="captureAnnotationHotkeyBtn" class="btn btn-secondary">Capture</button>
+      </div>
+      <p class="hint">Toggles drawing mode while recording (default Ctrl+Shift+Alt+A; must differ from the Start/Stop hotkey). The overlay pen shows armed (draw) vs disarmed (hidden); toggling never stops the recording, and Esc wipes the layer clean and exits draw mode.</p>
+    </div>
+
+    <div class="setting-group">
       <label class="setting-label" for="sourceSelect">Recording Source</label>
       
       <!-- Live Preview Area -->
@@ -81,10 +90,14 @@
       <div class="audio-level-bar">
         <div class="audio-level-fill" id="sysAudioLevel" style="width: 0%"></div>
       </div>
+      <p class="hint">System sound sync is calibrated automatically on launch.</p>
     </div>
 
     <div class="setting-group">
-      <label class="setting-label">Microphone</label>
+      <label class="setting-label">
+        <input type="checkbox" id="recordMic" />
+        <span>Record Microphone</span>
+      </label>
       <div class="source-row">
         <select id="micSelect" class="picker-input select-input source-select">
           <option value="None">None</option>
@@ -124,6 +137,7 @@
     </div>
 
     <div class="notification" id="notification"></div>
+
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>

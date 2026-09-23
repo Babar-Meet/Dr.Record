@@ -31,6 +31,9 @@ src-tauri/debug/
 tests/*.csv
 tests/*.json
 
+# Local end-to-end test workspace (scripts, recordings, logs; never commit)
+.e2e/
+
 # Bundled FFmpeg (downloaded by scripts/build-release.ps1)
 resources/ffmpeg/*.exe
 

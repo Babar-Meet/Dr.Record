@@ -1,13 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tracing;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default = "Config::default")]
 pub struct Config {
     pub output_dir: String,
     pub hotkey: String,
+    /// Second global shortcut toggling annotation draw mode (Feature 2).
+    /// Registered alongside `hotkey`; must differ from it (collision guard
+    /// in `lib.rs` skips registration with a warning when equal).
+    #[serde(default = "default_annotation_hotkey")]
+    pub annotation_hotkey: String,
     /// "all" | "monitor:<device_id>" (e.g. "monitor:\\.\DISPLAY1") | "window:HWND".
     /// Legacy "monitor:<index>" values are still accepted and resolved at use time.
     pub recording_source: String,
@@ -20,6 +24,26 @@ pub struct Config {
     pub auto_start: bool,
     pub record_system_audio: bool,
     pub microphone_name: String,
+    /// Mic master switch (default OFF). The dropdown only picks the device;
+    /// recording uses the mic only when this is true AND a device is set.
+    #[serde(default)]
+    pub record_mic: bool,
+    /// Auto-managed loopback latency compensation (ms, >= 0). Set by the
+    /// background output-latency calibration, never by hand: it measures how
+    /// late the default output device delivers and pre-skips exactly that
+    /// much at mux time. 0 = unmeasured/off.
+    #[serde(default)]
+    pub system_delay_ms: u32,
+    /// Output device the stored `system_delay_ms` was measured for.
+    /// A different default device triggers recalibration on next launch.
+    #[serde(default)]
+    pub system_delay_device: String,
+    #[serde(default)]
+    pub mic_delay_ms: u32,
+}
+
+fn default_annotation_hotkey() -> String {
+    "Ctrl+Shift+Alt+A".to_string()
 }
 
 impl Default for Config {
@@ -30,6 +54,7 @@ impl Default for Config {
                 .to_string_lossy()
                 .to_string(),
             hotkey: "Ctrl+Shift+Alt+R".to_string(),
+            annotation_hotkey: default_annotation_hotkey(),
             recording_source: "all".to_string(),
             recording_mode: None,
             framerate: 60,
@@ -54,6 +79,10 @@ impl Default for Config {
             },
             record_system_audio: true,
             microphone_name: "None".to_string(),
+            record_mic: false,
+            system_delay_ms: 0,
+            system_delay_device: String::new(),
+            mic_delay_ms: 0,
         }
     }
 }
@@ -110,6 +139,12 @@ impl Config {
             }
         }
         config.recording_mode = None;
+
+        // Backward-compat: configs written before the annotation hotkey
+        // existed (or with it cleared) fall back to the default.
+        if config.annotation_hotkey.trim().is_empty() {
+            config.annotation_hotkey = default_annotation_hotkey();
+        }
 
         config
     }

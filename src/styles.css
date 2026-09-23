@@ -292,6 +292,90 @@ h1 {
   text-align: center;
 }
 
+.pill-divider {
+  width: 1px;
+  height: 14px;
+  background: rgba(255,255,255,0.14);
+}
+
+.annotate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 12px;
+  color: #fff;
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  padding: 2px 9px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.annotate-btn:hover {
+  border-color: rgba(255,255,255,0.5);
+  background: rgba(255,255,255,0.08);
+}
+
+.annotate-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.annotate-btn .annotate-icon {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.annotate-btn .annotate-status {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(76,195,138,0.9);
+}
+
+.annotate-btn.is-armed {
+  background: rgba(76,195,138,0.18);
+  border-color: var(--green);
+  color: #8fe3b6;
+  box-shadow: 0 0 0 1px rgba(76,195,138,0.35);
+}
+
+.annotate-btn.is-armed .annotate-status {
+  display: inline-block;
+}
+
+/* Icon-only pen toggle: sits before the REC dot, no text label, so the
+   pill stays compact and fits the fixed overlay window. */
+.annotate-btn.annotate-icon-btn {
+  gap: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.annotate-btn.annotate-icon-btn .annotate-status {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+}
+
+.annotate-btn.annotate-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

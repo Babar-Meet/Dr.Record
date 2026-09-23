@@ -3,7 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 let capturingHotkey = false;
+let capturingTarget = "record";
 let currentHotkey = "Ctrl+Shift+Alt+R";
+let currentAnnotationHotkey = "Ctrl+Shift+Alt+A";
 let isSaving = false;
 
 const $ = (s) => document.querySelector(s);
@@ -165,6 +167,8 @@ async function loadConfig() {
     $("#outputDir").value = config.output_dir || "";
     $("#hotkeyInput").value = config.hotkey || "Ctrl+Shift+Alt+R";
     currentHotkey = config.hotkey || "Ctrl+Shift+Alt+R";
+    $("#annotationHotkeyInput").value = config.annotation_hotkey || "Ctrl+Shift+Alt+A";
+    currentAnnotationHotkey = config.annotation_hotkey || "Ctrl+Shift+Alt+A";
 
     // Populate sources then select the saved one
     const source = config.recording_source || "all";
@@ -182,6 +186,8 @@ async function loadConfig() {
     if (config.record_system_audio !== undefined) {
       $("#recordSystemAudio").checked = config.record_system_audio;
     }
+    // Mic master switch (default off); the dropdown only picks the device.
+    $("#recordMic").checked = config.record_mic === true;
   } catch (e) {
     showNotification("Failed to load config: " + e, "error");
   }
@@ -191,12 +197,14 @@ async function saveConfigAndStart() {
   const config = {
     output_dir: $("#outputDir").value,
     hotkey: currentHotkey,
+    annotation_hotkey: currentAnnotationHotkey,
     recording_source: $("#sourceSelect").value,
     framerate: parseInt($("#framerateSelect").value, 10),
     quality: $("#qualitySelect").value,
     show_overlay: $("#showOverlay").checked,
     auto_start: $("#autoStart").checked,
     record_system_audio: $("#recordSystemAudio").checked,
+    record_mic: $("#recordMic").checked,
     microphone_name: $("#micSelect").value,
   };
 
@@ -205,8 +213,14 @@ async function saveConfigAndStart() {
     return;
   }
 
+  if (hotkeysEqual(config.annotation_hotkey, config.hotkey)) {
+    showNotification("Annotation hotkey must differ from the Start/Stop hotkey.", "error");
+    return;
+  }
+
   try {
     await invoke("save_config", { config });
+    await invoke("reload_annotation_hotkey", { hotkey: currentAnnotationHotkey });
     await invoke("reload_hotkey", { hotkey: currentHotkey });
     showNotification("Saved! Hotkey: " + currentHotkey, "success");
     setTimeout(() => invoke("hide_settings"), 1200);
@@ -234,10 +248,42 @@ async function pickDirectory() {
 
 function startHotkeyCapture() {
   capturingHotkey = true;
+  capturingTarget = "record";
   const input = $("#hotkeyInput");
   input.value = "Press shortcut...";
   input.classList.add("capturing");
   $("#captureHotkeyBtn").textContent = "Listening...";
+}
+
+function startAnnotationHotkeyCapture() {
+  capturingHotkey = true;
+  capturingTarget = "annotation";
+  const input = $("#annotationHotkeyInput");
+  input.value = "Press shortcut...";
+  input.classList.add("capturing");
+  $("#captureAnnotationHotkeyBtn").textContent = "Listening...";
+}
+
+// Order/format-insensitive hotkey compare ("Ctrl+Shift+Alt+A" ==
+// "ctrl+alt+shift+a"): capture order (Ctrl,Alt,Shift,Win) differs from the
+// stored default order (Ctrl,Shift,Alt), and a naive compare lets the two
+// actions share one shortcut — the annotation key then starts/stops video.
+function hotkeysEqual(a, b) {
+  const norm = (s) => {
+    const mods = new Set();
+    let key = "";
+    for (const part of String(s).split("+")) {
+      const p = part.trim().toLowerCase();
+      if (!p) continue;
+      if (p === "ctrl" || p === "control") mods.add("ctrl");
+      else if (p === "alt" || p === "option") mods.add("alt");
+      else if (p === "shift") mods.add("shift");
+      else if (["win", "meta", "super", "command", "cmd"].includes(p)) mods.add("meta");
+      else key = p;
+    }
+    return [...mods].sort().join("+") + "+" + key;
+  };
+  return norm(a) === norm(b);
 }
 
 function handleKeyCapture(e) {
@@ -269,20 +315,37 @@ function handleKeyCapture(e) {
   if (parts.length < 2) return;
 
   const combo = parts.join("+");
-  currentHotkey = combo;
-  $("#hotkeyInput").value = combo;
+  if (capturingTarget === "annotation") {
+    if (hotkeysEqual(combo, currentHotkey)) {
+      showNotification("Annotation hotkey must differ from the Start/Stop hotkey.", "error");
+      cancelHotkeyCapture();
+      return;
+    }
+    currentAnnotationHotkey = combo;
+    $("#annotationHotkeyInput").value = combo;
+  } else {
+    if (hotkeysEqual(combo, currentAnnotationHotkey)) {
+      showNotification("Start/Stop hotkey must differ from the annotation hotkey.", "error");
+      cancelHotkeyCapture();
+      return;
+    }
+    currentHotkey = combo;
+    $("#hotkeyInput").value = combo;
+  }
   cancelHotkeyCapture();
   showNotification("Hotkey set to: " + combo, "success");
 }
 
 function cancelHotkeyCapture() {
   capturingHotkey = false;
-  const input = $("#hotkeyInput");
+  const input = capturingTarget === "annotation" ? $("#annotationHotkeyInput") : $("#hotkeyInput");
+  const btn = capturingTarget === "annotation" ? $("#captureAnnotationHotkeyBtn") : $("#captureHotkeyBtn");
   input.classList.remove("capturing");
-  $("#captureHotkeyBtn").textContent = "Capture";
+  btn.textContent = "Capture";
   if (!input.value || input.value === "Press shortcut...") {
-    input.value = currentHotkey;
+    input.value = capturingTarget === "annotation" ? currentAnnotationHotkey : currentHotkey;
   }
+  capturingTarget = "record";
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +492,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     console.error("FFmpeg Crashed:\n", errorMsg);
     alert("Recording failed because FFmpeg crashed.\n\n" + errorMsg);
   });
+
+  // Rich take events: log offsets, surface warnings/errors. Saving itself
+  // lives ONLY in the dedicated save popup (no second dialog in settings).
+  const unlistenFinalized = await listen("take-finalized", (e) => {
+    const r = e.payload ?? {};
+    const off = r.offsets_ms ?? {};
+    if (off.system != null || off.mic != null) {
+      console.info(`A/V offsets ms (positive = audio late): system=${off.system} mic=${off.mic}`);
+    }
+  });
+  const unlistenWarning = await listen("save-warning", (e) => {
+    const warnings = e.payload ?? [];
+    for (const w of warnings) {
+      showNotification(`Audio warning (${w.track}): final file may be video-only.`, "error");
+    }
+  });
+  const unlistenSaveError = await listen("save-error", (e) => {
+    const msg = e.payload?.message ?? "Finalization failed.";
+    const retryable = e.payload?.retryable;
+    showNotification(retryable ? `${msg} You can retry without re-recording.` : msg, "error");
+  });
   
   const unlistenSysAudio = await listen("audio-level-system", (event) => {
     setAudioLevel("sysAudioLevel", event.payload);
@@ -444,12 +528,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     unlistenError();
     unlistenAudioError();
     unlistenWindowClosed();
+    unlistenFinalized();
+    unlistenWarning();
+    unlistenSaveError();
     unlistenSysAudio();
     unlistenMicAudio();
   });
 
   $("#pickDirBtn").addEventListener("click", pickDirectory);
   $("#captureHotkeyBtn").addEventListener("click", startHotkeyCapture);
+  $("#captureAnnotationHotkeyBtn").addEventListener("click", startAnnotationHotkeyCapture);
   $("#saveBtn").addEventListener("click", saveConfigAndStart);
   $("#testRecBtn").addEventListener("click", testRecord);
   $("#refreshSourcesBtn").addEventListener("click", async () => {
@@ -458,8 +546,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("#refreshMicsBtn").addEventListener("click", async () => {
     await populateMicrophones(null);
+    restartPreviewsSoon();
     showNotification("Microphones refreshed", "success");
   });
+
+  // Level meters follow the CURRENT selections live: without this the meters
+  // stay on the old device until the next save + reopen.
+  let previewTimer = null;
+  async function restartPreviewsSoon() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(async () => {
+      try {
+        await invoke("restart_audio_previews", {
+          recordSystemAudio: $("#recordSystemAudio").checked,
+          recordMic: $("#recordMic").checked,
+          microphoneName: $("#micSelect").value ?? "None",
+        });
+      } catch {
+        // Meters stay on the previous device; recording path unaffected.
+      }
+    }, 300);
+  }
+  $("#micSelect").addEventListener("change", restartPreviewsSoon);
+  $("#recordMic").addEventListener("change", restartPreviewsSoon);
+  $("#recordSystemAudio").addEventListener("change", restartPreviewsSoon);
 
   document.addEventListener("keydown", handleKeyCapture);
   document.addEventListener("keyup", (e) => {

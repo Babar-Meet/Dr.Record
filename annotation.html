@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dr. Record — Annotation</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    #drawCanvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #annoToolbar {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+      display: flex; gap: 6px; align-items: center;
+      background: rgba(0,0,0,0.82); border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px; padding: 6px 10px; z-index: 10;
+      font-family: "Segoe UI", sans-serif; font-size: 12px; color: #fff;
+      transition: opacity 0.3s;
+    }
+    #annoToolbar.hidden { opacity: 0; pointer-events: none; }
+    #annoToolbar button, #annoToolbar select {
+      background: #2d2d2d; color: #fff; border: 1px solid #404040;
+      border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+    }
+    #annoToolbar button.active { border-color: #60cdff; background: #1c3a4a; }
+    #annoToolbar button:disabled { opacity: 0.4; cursor: default; }
+    #annoToolbar .tb-sep { width: 1px; align-self: stretch; background: rgba(255,255,255,0.12); }
+    #annoToolbar .dotsize { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 26px; padding: 0; }
+    #annoToolbar .dotsize span { display: block; border-radius: 50%; background: #fff; }
+    #annoToolbar .swatch { width: 18px; height: 18px; border-radius: 50%; padding: 0; border: 2px solid transparent; }
+    #annoToolbar .swatch.active { border-color: #fff; }
+    #armedBadge { color: #4cc38a; font-weight: 700; }
+    #annoTextInput {
+      position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
+      z-index: 11; display: none;
+      background: #1c1c1c; color: #fff; border: 1px solid #60cdff;
+      border-radius: 6px; padding: 6px 10px; font-size: 13px;
+      font-family: "Segoe UI", sans-serif; width: 220px;
+    }
+    #annoTextInput.visible { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="drawCanvas"></canvas>
+  <!-- Inline label input for the text tool (replaces window.prompt, which is
+       unavailable/blocked in the fullscreen webview; empty submit = no-op). -->
+  <input id="annoTextInput" placeholder="Label…" maxlength="200" autocomplete="off" />
+  <div id="annoToolbar" class="hidden">
+    <span id="armedBadge" title="Draw mode — Esc wipes the layer and exits">DRAW</span>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button data-tool="pen" class="active" title="Pen">Pen</button>
+    <button data-tool="highlighter" title="Highlighter">Marker</button>
+    <button data-tool="arrow" title="Arrow">Arrow</button>
+    <button data-tool="circle" title="Circle">Circle</button>
+    <button data-tool="rect" title="Rectangle">Rect</button>
+    <button data-tool="text" title="Text label">Text</button>
+    <button data-tool="eraser" title="Eraser">Eraser</button>
+    <button data-tool="clear" title="Clear everything">Clear</button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button class="swatch active" data-color="#ff3b30" style="background:#ff3b30" title="Red"></button>
+    <button class="swatch" data-color="#ffcc00" style="background:#ffcc00" title="Yellow"></button>
+    <button class="swatch" data-color="#4cc38a" style="background:#4cc38a" title="Green"></button>
+    <button class="swatch" data-color="#0a84ff" style="background:#0a84ff" title="Blue"></button>
+    <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+    <button class="swatch" data-color="#000000" style="background:#000000" title="Black"></button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button class="dotsize" data-thickness="thin" title="Thin"><span style="width:6px;height:6px"></span></button>
+    <button class="dotsize active" data-thickness="medium" title="Medium"><span style="width:10px;height:10px"></span></button>
+    <button class="dotsize" data-thickness="thick" title="Thick"><span style="width:14px;height:14px"></span></button>
+    <span class="tb-sep" aria-hidden="true"></span>
+    <button id="exitDrawBtn" title="Done — keep marks and exit (Esc wipes all and exits)">Done</button>
+  </div>
+  <script type="module" src="/src/annotation.js"></script>
+</body>
+</html>

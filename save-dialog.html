@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dr. Record — Save recording</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <style>
+    body { font-family: "Segoe UI", sans-serif; background: #2d2d2d; color: #e0e0e0; margin: 0; padding: 20px; }
+    h2 { font-size: 15px; margin-bottom: 4px; }
+    .sub { font-size: 12px; color: #9d9d9d; margin-bottom: 12px; }
+    input { width: 100%; background: #1c1c1c; border: 1px solid #404040; border-radius: 6px; padding: 8px 10px; color: #e0e0e0; font-size: 13px; }
+    .error { color: #e74856; font-size: 12px; min-height: 18px; margin: 6px 0; }
+    .warn { color: orange; font-size: 12px; margin: 6px 0; }
+    .row { display: flex; gap: 8px; margin-top: 10px; }
+    .btn { padding: 8px 16px; border: 1px solid #404040; border-radius: 6px; font-size: 13px; cursor: pointer; }
+    .btn-primary { background: #60cdff; color: #000; border-color: #60cdff; font-weight: 600; }
+    .btn-danger { background: transparent; color: #e74856; border-color: #e74856; }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .meta { font-size: 11px; color: #9d9d9d; margin-top: 10px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h2>Recording finished</h2>
+  <div class="sub">Name your recording, or delete it. Temporary files are cleaned up either way.</div>
+  <input id="fileName" maxlength="255" />
+  <div class="error" id="nameError"></div>
+  <div class="warn" id="takeWarn"></div>
+  <div class="row">
+    <button class="btn btn-primary" id="saveBtn">Save</button>
+    <button class="btn btn-danger" id="deleteBtn">Delete Locally</button>
+    <button class="btn" id="retryBtn" style="display:none">Retry finalize</button>
+  </div>
+  <div class="meta" id="takeInfo"></div>
+  <div class="meta" id="takeMeta"></div>
+  <script type="module" src="/src/save-dialog.js"></script>
+</body>
+</html>

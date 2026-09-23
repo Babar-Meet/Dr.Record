@@ -28,7 +28,8 @@ It is intended for developers, content creators, QA engineers, and anyone who ne
 
 ## Features
 
-- **Global hotkey toggle** — configurable key combination (default `Ctrl+Shift+R`) starts and stops recording from any app.
+- **Global hotkey toggle** — configurable key combination (default `Ctrl+Shift+Alt+R`) starts and stops recording from any app.
+- **Annotation hotkey** — configurable second shortcut (default `Ctrl+Shift+Alt+A`) toggles draw mode while recording; `Esc` exits draw mode only. Must differ from the Start/Stop hotkey.
 - **System tray operation** — left-click opens settings, right-click shows a menu with Settings and Quit.
 - **Three recording modes:**
   - **Full Screen** — primary monitor only.
@@ -42,6 +43,9 @@ It is intended for developers, content creators, QA engineers, and anyone who ne
 - **FFmpeg bundled in installer** — the NSIS installer includes `ffmpeg.exe` alongside the app binary; no separate download needed.
 - **FFmpeg-based encoding** — uses `gdigrab` for capture, `libx264` with `ultrafast` preset and `yuv420p` pixel format.
 - **Timestamped filenames** — e.g. `DrRecord_Screen_2026-07-07_14-30-00.mp4`.
+- **AV sync + validation/retry** — one shared start clock for video and every audio track; per-track offsets logged in ms (positive = audio late); final file validated (missing, 0-byte, `moov` check) before success is reported; failed finalization keeps temp artifacts and offers retry without re-recording; an enabled audio track with no data warns naming system vs mic instead of silently saving video-only.
+- **Annotation overlay** — pen, marker, arrow, text, eraser, and clear-all with color picker (red, yellow, green, white, black) and thickness (thin, medium, thick); overlay Draw button plus annotation hotkey toggle, armed/disarmed state shown on the overlay; disarmed passes mouse through, armed draws; marks burn into the captured pixels so any player shows them.
+- **Post-stop save dialog** — modal after every normal stop with editable name prefilled from the timestamp default, Save and Delete Locally actions, and a Retry finalize button when validation failed; rejects empty, illegal Windows characters (`< > : " / \ | ? *`, controls), trailing space/dot, reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), and overlong names inline; filename collision asks for explicit overwrite confirm; `Enter` saves, `Esc` keeps the default name; Save and Delete each execute exactly once (double-click safe); resolving the dialog cleans up all temp files for the take.
 - **Test recording button** — a 5-second test in the settings window to verify everything works.
 - **Auto-start on Windows login** — optional registry-based startup via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 - **Display info** — the settings window shows the detected monitor resolution and refresh rate.
@@ -275,7 +279,17 @@ All commands are invoked from JavaScript via `@tauri-apps/api/core`'s `invoke()`
 | Command | Parameters | Returns | Purpose |
 |---|---|---|---|
 | `start_rec` | — | `Result<String, String>` — output file path | Start screen recording |
-| `stop_rec` | — | `Result<Option<String>, String>` — output file path | Stop screen recording |
+| `stop_rec` | — | `Result<Option<String>, String>` — output file path | Stop screen recording (opens the save dialog) |
+| `stop_rec_ex` | — | `Result<StopResult, String>` — offsets, validation, warnings, retained temps | Stop and return the rich take result |
+| `retry_finalize` / `retry_mux` | `{ take_id: String }` | `Result<StopResult, String>` | Re-attempt finalization from retained temps without re-recording |
+| `validate_take` | `{ path: String }` | `{ valid, reason }` | Validate a final file (0-byte / `moov` scan) |
+| `rename_take` | `{ take_id, new_name, overwrite }` | `Result<String, String>` — final path | Save the take under the edited name |
+| `delete_take` / `discard_take` | `{ take_id: String }` | `Result<(), String>` | Delete final file plus all temp artifacts for the take |
+| `get_pending_take` / `resolve_pending_take` | `{ action, take_id?, new_name?, overwrite? }` | Pending take / final path | Inspect or resolve (save/delete/cancel) the pending save dialog |
+| `toggle_annotation` / `annotation_toggle` / `annotation_show` / `annotation_hide` | `{ source? }` | Armed state | Arm/disarm draw mode without touching recording (double-fire safe) |
+| `annotation_clear` | — | `Result<(), String>` | Clear marks for subsequent frames (recorded frames keep theirs) |
+| `set_annotation_tool` | `{ tool, color?, thickness? }` | `Result<(), String>` | Select pen/marker/arrow/text/eraser, color, thickness |
+| `get_av_offsets` | — | `{ system, mic }` ms, signed | Per-track offsets vs the shared start clock |
 | `get_status` | — | `Result<bool, String>` — true if recording | Check recording state |
 | `get_elapsed_secs` | — | `Result<u64, String>` — elapsed seconds | Get recording duration |
 | `load_config` | — | `Result<Config, String>` | Load persisted config from disk |
@@ -339,8 +353,9 @@ Not applicable. This project does not use a database. All persistent state is st
 ```json
 {
   "output_dir": "C:\\Users\\<user>\\Videos",
-  "hotkey": "Ctrl+Shift+R",
-  "recording_mode": "fullscreen",
+  "hotkey": "Ctrl+Shift+Alt+R",
+  "annotation_hotkey": "Ctrl+Shift+Alt+A",
+  "recording_source": "all",
   "framerate": 60,
   "quality": "high",
   "show_overlay": true,
@@ -351,8 +366,9 @@ Not applicable. This project does not use a database. All persistent state is st
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `output_dir` | string | User's Videos folder | Directory where `.mp4` files are saved |
-| `hotkey` | string | `"Ctrl+Shift+R"` | Global shortcut to toggle recording |
-| `recording_mode` | string | `"fullscreen"` | Screen area to capture: `"fullscreen"`, `"multimonitor"`, or `"window"` |
+| `hotkey` | string | `"Ctrl+Shift+Alt+R"` | Global shortcut to toggle recording |
+| `annotation_hotkey` | string | `"Ctrl+Shift+Alt+A"` | Global shortcut to toggle annotation draw mode (must differ from `hotkey`) |
+| `recording_source` | string | `"all"` | Source to capture: `"all"` or `"monitor:<device_id>"` (legacy `"monitor:<index>"` values are migrated) |
 | `framerate` | number | `60` | Target frames per second (0 = Auto, defaults to 60 in the recorder) |
 | `quality` | string | `"high"` | Encoding quality: `"lossless"` (CRF 0), `"high"` (CRF 18), `"medium"` (CRF 23), `"low"` (CRF 28) |
 | `show_overlay` | boolean | `true` | Whether to show the recording timer overlay |
@@ -502,11 +518,39 @@ After building, run the binary directly:
 
 1. **Launch**: The app starts, reads `config.json` from `%APPDATA%\dr-record\`, creates the system tray icon, registers the global hotkey, and always opens the settings window. This window appears on every launch — closing it hides the app to the system tray rather than quitting.
 2. **Configuration**: The user can set the output directory, hotkey, recording mode, framerate, quality, overlay visibility, and auto-start preference. Clicking "Save & Start" persists the config, re-registers the hotkey, and auto-hides the settings window.
-3. **Recording toggle**: From any application, pressing the hotkey (default `Ctrl+Shift+R`) starts FFmpeg screen capture. A transparent overlay appears at the bottom-right of the screen showing a red pulsing dot, "REC" label, and an elapsed timer (MM:SS). The overlay polls the elapsed time every second. Pressing the hotkey again sends `q\n` to FFmpeg's stdin for graceful shutdown, waits for the process to exit, saves the `.mp4` file, and hides the overlay.
+3. **Recording toggle**: From any application, pressing the hotkey (default `Ctrl+Shift+Alt+R`) starts FFmpeg screen capture. A transparent overlay appears at the bottom-right of the screen showing a red pulsing dot, "REC" label, and an elapsed timer (MM:SS). The overlay polls the elapsed time every second. Pressing the hotkey again sends `q\n` to FFmpeg's stdin for graceful shutdown, waits for the process to exit, saves the `.mp4` file, and hides the overlay.
 4. **File output**: Recordings are saved to the configured directory with filenames like `DrRecord_Screen_2026-07-07_14-30-00.mp4`. The mode label in the filename varies: `Screen` (fullscreen), `Multi` (all monitors), or `Window` (active window).
 5. **Accessing settings**: Left-click the tray icon to show settings at any time. Right-click for "Settings" and "Quit" options.
 6. **Auto-start**: If enabled, the app registers itself in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` for automatic startup on user login.
 7. **Quitting**: Via the tray menu "Quit" item. If a recording is in progress, it is stopped and saved before the app exits. Closing the settings window via the X button or Alt+F4 only hides it — the app continues running in the system tray.
+
+---
+
+## Hotkeys
+
+| Action | Default | Notes |
+|---|---|---|
+| Start / Stop recording | `Ctrl+Shift+Alt+R` | Configurable in settings; pressing it while the save dialog is pending is ignored until the dialog resolves |
+| Toggle annotation draw mode | `Ctrl+Shift+Alt+A` | Configurable in settings; must differ from Start/Stop; never stops the recording |
+| Exit draw mode | `Esc` | Exits annotation mode only; recording continues, marks persist |
+
+## Post-stop save dialog
+
+After every normal stop (hotkey, UI, tray), once finalization succeeds or fails with a retained artifact, a modal dialog appears (dedicated window with the settings view as fallback):
+
+- Editable filename prefilled with the timestamp default (`DrRecord_<Label>_<timestamp>`).
+- `Save` persists under the edited (or default) name and confirms the final path; `Delete Locally` deletes the final file plus all temp artifacts (`_video`, `_sys`, `_mic`, logs for that take) after an explicit confirm.
+- `Retry finalize` appears when validation failed and re-attempts from retained temps without re-recording.
+- `Enter` confirms Save; `Esc` keeps the default name; closing without choosing never orphans temp files. Quitting with a pending dialog journals it so the next launch re-offers the dialog.
+
+## Troubleshooting
+
+- **Desync (audio early/late vs screen)**: offsets per track are logged in ms (positive = audio late) and included in the stop result; run `validate_take` on the output. Drift correction keeps tracks aligned for short and 10+ minute recordings.
+- **Corrupt/unplayable file (0-byte, missing, no `moov`)**: never reported as success. The UI shows a non-technical error with a retry action; temp artifacts are retained until a valid file exists or you explicitly discard them.
+- **Missing audio track**: an enabled track with no data is a warning, not silent success. The dialog and logs name the track (system vs mic) and whether the file is video-only.
+- **Retry**: use `Retry finalize` in the save dialog (or the `retry_finalize` / `retry_mux` command) to re-attempt from retained temps.
+- **Annotation wrong position on multi-monitor/DPR**: marks track the recorded monitor including negative offsets and scaling; strokes crossing monitor edges are clipped, never offset.
+- **FFmpeg logs**: stderr is redirected to `%TEMP%\dr-record-ffmpeg.log`.
 
 ---
 

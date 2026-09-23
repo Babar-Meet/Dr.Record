@@ -10,6 +10,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         overlay: resolve(__dirname, "overlay.html"),
+        annotation: resolve(__dirname, "annotation.html"),
+        "save-dialog": resolve(__dirname, "save-dialog.html"),
       },
     },
     target: ["es2021", "chrome100", "safari13"],
