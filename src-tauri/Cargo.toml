@@ -1,6 +1,6 @@
 [package]
 name = "dr-record"
-version = "2.0.0"
+version = "2.1.0"
 description = "Dr. Record - Zero BS Screenshot Recorder"
 authors = ["Dr. Record"]
 edition = "2021"
