@@ -212,6 +212,10 @@ fn after_take_finalized(
     }
     close_overlay(app);
     let _ = set_annotation_clickthrough(app, true);
+    // The stop path clears `annotation_armed` directly in recorder.rs,
+    // bypassing `set_annotation_armed`; re-converge here so a
+    // stop-while-armed never leaks the Esc grab in-process.
+    sync_annotation_esc_shortcut(app);
     // Disarm everywhere (overlay pill, toolbar, canvas cursor) so a stale
     // "Drawing" state can never survive the stop; marks already captured
     // persist in the video track regardless.
@@ -586,6 +590,7 @@ fn set_annotation_armed(
     state.annotation_armed.store(armed, Ordering::SeqCst);
     let owned: Arc<RecorderState> = Arc::clone(state);
     emit_annotation_state(app, &owned, source);
+    sync_annotation_esc_shortcut(app);
     Ok(armed)
 }
 
@@ -647,6 +652,65 @@ fn handle_annotation_hotkey(app: &AppHandle) {
     }
 }
 
+/// Serializes concurrent Esc syncs so rapid toggles converge in order.
+static ESC_SYNC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Converge the global Esc grab with the armed flag: register Esc only
+/// while armed, release it on every disarm. Reads the desired state from
+/// `RecorderState::annotation_armed` AT EXECUTION TIME (convergent under
+/// rapid toggles, no stale-argument races) and no-ops when already in sync
+/// (double-registration guard). The (un)register work runs on a detached
+/// worker thread — NEVER inline — because `set_annotation_armed` is
+/// reachable from inside the hotkey-event handler, where the blocking
+/// main-thread dispatch would deadlock. Detached spawn, never joined, so it
+/// cannot hang shutdown. Failures never fail the caller: an Esc-grab
+/// failure must never break annotation (window Esc remains as backstop).
+fn sync_annotation_esc_shortcut(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _guard = ESC_SYNC_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let desired = app
+            .try_state::<Arc<RecorderState>>()
+            .map(|s| s.annotation_armed.load(Ordering::SeqCst))
+            .unwrap_or(false);
+        let registered = app
+            .global_shortcut()
+            .is_registered(annotation_esc_shortcut());
+        if registered == desired {
+            tracing::info!(
+                "Esc shortcut sync: skip (registered={} armed={})",
+                registered,
+                desired
+            );
+            return;
+        }
+        if desired {
+            match app.global_shortcut().register(annotation_esc_shortcut()) {
+                Ok(_) => {
+                    tracing::info!("Esc shortcut registered: {}", annotation_esc_shortcut())
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to register Esc shortcut '{}': {} (window Esc still works when focused)",
+                    annotation_esc_shortcut(),
+                    e
+                ),
+            }
+        } else {
+            match app.global_shortcut().unregister(annotation_esc_shortcut()) {
+                Ok(_) => {
+                    tracing::info!("Esc shortcut unregistered: {}", annotation_esc_shortcut())
+                }
+                Err(e) => tracing::warn!(
+                    "Failed to unregister Esc shortcut '{}': {}",
+                    annotation_esc_shortcut(),
+                    e
+                ),
+            }
+        }
+    });
+}
+
 /// (Re)register the record hotkey plus the annotation hotkey. Collision
 /// guard: when both strings match (case-insensitive) the record hotkey
 /// wins and annotation registration is skipped with a warning, so the two
@@ -662,6 +726,9 @@ fn register_record_and_annotation_hotkeys(app: &AppHandle, record: &str, annotat
             "annotation hotkey '{}' collides with record hotkey; annotation hotkey skipped",
             annotation
         );
+        // `unregister_all` above also dropped a while-armed Esc grab, so
+        // re-converge even on this early-return path.
+        sync_annotation_esc_shortcut(app);
         return;
     }
     match app.global_shortcut().register(annotation) {
@@ -672,18 +739,12 @@ fn register_record_and_annotation_hotkeys(app: &AppHandle, record: &str, annotat
             e
         ),
     }
-    // Global Esc (handled in the shortcut handler: wipe + disarm only when
-    // armed, ignored otherwise). Registered here — at startup and on every
-    // hotkey reload — because registering from inside the hotkey-event
-    // handler deadlocks on the main-thread dispatch.
-    match app.global_shortcut().register(annotation_esc_shortcut()) {
-        Ok(_) => tracing::info!("Esc shortcut registered: {}", annotation_esc_shortcut()),
-        Err(e) => tracing::warn!(
-            "Failed to register Esc shortcut '{}': {} (window Esc still works when focused)",
-            annotation_esc_shortcut(),
-            e
-        ),
-    }
+    // Esc converges with the armed flag (arm-scoped grab): a reload drops
+    // it via `unregister_all` above, so re-grab here when armed; while
+    // disarmed this leaves Esc untouched. Never (un)register from inside
+    // the hotkey-event handler — the blocking main-thread dispatch
+    // deadlocks there — hence the worker-thread sync.
+    sync_annotation_esc_shortcut(app);
 }
 
 #[tauri::command]

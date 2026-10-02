@@ -157,7 +157,8 @@ pub fn hide_save_dialog_window(app: &AppHandle) {
 }
 
 /// Canonical global Esc shortcut string: whichever spelling the hotkey
-/// parser accepts. Registration happens once at startup (proven context);
+/// parser accepts. Registration is arm-scoped (grabbed while armed via the
+/// `sync_annotation_esc_shortcut` worker thread, released on every disarm);
 /// NEVER register/unregister from inside the hotkey-event handler — the
 /// blocking main-thread dispatch deadlocks there and wedges the whole stop.
 pub fn annotation_esc_shortcut() -> &'static str {
