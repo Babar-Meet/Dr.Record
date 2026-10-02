@@ -25,7 +25,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Open a capture stream, retrying a few times. WASAPI releases a device
 /// asynchronously, so immediately reopening a device that was just stopped
 /// (e.g. a mic preview stream) can fail transiently; a short backoff resolves
-/// it without silently dropping the track.
+/// it without silently dropping the track. The system (loopback) track uses a
+/// longer span (5 attempts, 500*(i+1)ms ≈ 5s worst case) so a start landing
+/// mid output-device flip waits out the flip with a fresh device resolution
+/// per attempt; the mic track keeps the original 4-attempt / 200*(i+1)ms span.
 fn start_audio_recorder_with_retry(
     app: &tauri::AppHandle,
     is_system: bool,
@@ -34,7 +37,7 @@ fn start_audio_recorder_with_retry(
     source_name: String,
     common_start: Option<Instant>,
 ) -> Result<AudioRecorder, String> {
-    let attempts = 4;
+    let attempts = if is_system { 5 } else { 4 };
     let mut last_err = String::new();
     for i in 0..attempts {
         let mut recorder = AudioRecorder::new();
@@ -57,7 +60,8 @@ fn start_audio_recorder_with_retry(
                 );
                 last_err = e;
                 if i + 1 < attempts {
-                    std::thread::sleep(std::time::Duration::from_millis(200 * (i + 1)));
+                    let backoff_ms = if is_system { 500 * (i + 1) } else { 200 * (i + 1) };
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
                 }
             }
         }
@@ -66,14 +70,16 @@ fn start_audio_recorder_with_retry(
 }
 
 /// Preview retry path: preserves the original 5-arg `AudioRecorder::start`
-/// (no shared clock; offsets stay `None` / `"none"`).
+/// (no shared clock; offsets stay `None` / `"none"`). Same schedule split as
+/// the record path: system previews span 5 attempts / 500*(i+1)ms (harmless
+/// on background preview threads), mic previews keep 4 / 200*(i+1)ms.
 fn start_audio_preview_with_retry(
     app: &tauri::AppHandle,
     is_system: bool,
     device_name: Option<String>,
     source_name: String,
 ) -> Result<AudioRecorder, String> {
-    let attempts = 4;
+    let attempts = if is_system { 5 } else { 4 };
     let mut last_err = String::new();
     for i in 0..attempts {
         let mut recorder = AudioRecorder::new();
@@ -88,7 +94,8 @@ fn start_audio_preview_with_retry(
             Err(e) => {
                 last_err = e;
                 if i + 1 < attempts {
-                    std::thread::sleep(std::time::Duration::from_millis(200 * (i + 1)));
+                    let backoff_ms = if is_system { 500 * (i + 1) } else { 200 * (i + 1) };
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
                 }
             }
         }

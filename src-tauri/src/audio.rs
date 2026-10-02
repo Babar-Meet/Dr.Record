@@ -19,6 +19,25 @@ pub struct AudioRecorder {
     received_input: Arc<AtomicBool>,
 }
 
+/// Resolve the current default output (loopback source) via enumeration so
+/// config/stream setup goes through cpal's Specific-device direct-`Activate`
+/// path instead of the async default-device path (fragile mid-flip:
+/// RPC_E_CHANGED_MODE). First-match-wins on duplicate friendly names, same
+/// as the existing mic picker. Falls back to `host.default_output_device()`
+/// when enumeration fails or nothing matches.
+fn resolve_system_output_device(host: &cpal::Host) -> Option<cpal::Device> {
+    if let Some(default_name) = default_output_name() {
+        if let Ok(devices) = host.output_devices() {
+            for d in devices {
+                if d.to_string() == default_name {
+                    return Some(d);
+                }
+            }
+        }
+    }
+    host.default_output_device()
+}
+
 impl AudioRecorder {
     pub fn new() -> Self {
         Self {
@@ -88,7 +107,7 @@ impl AudioRecorder {
     ) -> Result<(), String> {
         let host = cpal::default_host();
         let device = if is_system {
-            host.default_output_device()
+            resolve_system_output_device(&host)
                 .ok_or_else(|| "No default output device available".to_string())?
         } else {
             if let Some(name) = device_name {
